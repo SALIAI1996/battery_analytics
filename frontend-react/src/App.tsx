@@ -382,8 +382,8 @@ export default function App() {
 
           {last && !isTs && (
             <div className="banner">
-              This build focuses on ThingSpeak. For pack/cell battery charts, use the Streamlit app locally or extend
-              this React UI.
+              Non–ThingSpeak telemetry (e.g. serial / simulated battery) is available from the API; extend this React
+              UI to chart pack and cell data if you need it in the browser.
             </div>
           )}
 

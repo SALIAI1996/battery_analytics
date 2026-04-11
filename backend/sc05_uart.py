@@ -1,6 +1,5 @@
 """
-UART line parser for battery data from microcontrollers (PIC16F877A, Arduino, etc.)
-via HC-05 Bluetooth serial bridge.
+UART line parser for battery data from microcontrollers (PIC, Arduino, etc.) over serial.
 
 Handles multiple data formats:
   - Multi-cell: "V1:3.65,V2:3.64,V3:3.66,V4:3.63,I:2.1,T:28.5"

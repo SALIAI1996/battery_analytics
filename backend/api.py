@@ -2,21 +2,24 @@ from __future__ import annotations
 
 import logging
 import os
-import platform
-import shutil
 from datetime import datetime
+from pathlib import Path
 from typing import Optional
+
+from dotenv import load_dotenv
+
+# Load repo-root .env before any os.environ reads
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from fastapi import FastAPI, HTTPException, Query
 
 log = logging.getLogger(__name__)
 from fastapi.middleware.cors import CORSMiddleware
 
-from .bluetooth_pair import inquiry as bt_inquiry, pair_and_connect as bt_pair
-from .hc05_serial import list_serial_ports
+from .serial_streamer import list_serial_ports
 from .models import (
     ConnectRequest, ConnectResponse, DiscoveredDevice,
-    LatestResponse, PairRequest, PairResponse, SerialPortInfo, StatusResponse,
+    LatestResponse, SerialPortInfo, StatusResponse,
     TerminalSendRequest, ThingSpeakConnectRequest,
 )
 from .state import STATE
@@ -42,25 +45,12 @@ app.add_middleware(
 
 @app.get("/health")
 def health() -> dict:
-    """Includes whether this host can run MAC-pairing / bluetoothctl (false on Streamlit Cloud)."""
-    sysname = platform.system()
-    tools = False
-    if sysname == "Darwin":
-        tools = bool(shutil.which("blueutil"))
-    elif sysname == "Linux":
-        tools = bool(shutil.which("bluetoothctl"))
-    elif sysname == "Windows":
-        tools = True
-    return {
-        "ok": True,
-        "platform": sysname,
-        "server_bluetooth_cli_available": tools,
-    }
+    return {"ok": True}
 
 
 @app.get("/serial-ports", response_model=list[SerialPortInfo])
 def serial_ports() -> list[SerialPortInfo]:
-    """List all serial ports visible to the OS (paired HC-05 will appear here)."""
+    """List serial ports visible to the OS (e.g. USB–UART adapters)."""
     return [SerialPortInfo(**p) for p in list_serial_ports()]
 
 
@@ -95,37 +85,6 @@ def devices(include_sim: bool = True) -> list[DiscoveredDevice]:
     return found
 
 
-@app.get("/bluetooth-scan")
-def bluetooth_scan(duration: int = Query(default=8, ge=3, le=30)) -> list[dict]:
-    """Scan for nearby Bluetooth devices (takes several seconds)."""
-    try:
-        return bt_inquiry(duration=duration)
-    except Exception as e:
-        log.warning("Bluetooth scan failed: %s", e)
-        return []
-
-
-@app.post("/pair-bluetooth", response_model=PairResponse)
-def pair_bluetooth(req: PairRequest) -> PairResponse:
-    """Pair with an HC-05 by MAC address, connect, and discover the serial port."""
-    try:
-        result = bt_pair(mac_raw=req.mac_address, pin=req.pin)
-        return PairResponse(
-            mac=result.mac,
-            already_paired=result.already_paired,
-            paired=result.paired,
-            connected=result.connected,
-            serial_port=result.serial_port,
-            message=result.message,
-        )
-    except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
-    except RuntimeError as e:
-        raise HTTPException(status_code=500, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
-
-
 def _resolve_thingspeak_key(req: ThingSpeakConnectRequest) -> str:
     key = (req.read_api_key or "").strip()
     if key:
@@ -141,7 +100,7 @@ def _resolve_thingspeak_key(req: ThingSpeakConnectRequest) -> str:
 
 @app.post("/connect-thingspeak", response_model=ConnectResponse)
 def connect_thingspeak(req: ThingSpeakConnectRequest) -> ConnectResponse:
-    """Subscribe to a ThingSpeak channel feed (replaces serial/BT as the active data source)."""
+    """Subscribe to a ThingSpeak channel feed (replaces serial as the active data source)."""
     key = _resolve_thingspeak_key(req)
     try:
         STATE.connect_thingspeak(
@@ -188,7 +147,7 @@ def terminal_log(
     since_id: int = Query(default=0, ge=0),
     limit: int = Query(default=500, ge=1, le=2000),
 ) -> dict:
-    """Incremental RX/TX log (Arduino Bluetooth Controller–style stream)."""
+    """Incremental RX/TX log for the active serial session."""
     if STATE.mode != "serial" or STATE.serial is None:
         return {"ok": False, "lines": [], "last_id": since_id, "message": "Not connected to serial."}
     lines = STATE.serial.terminal_since(since_id, limit)
@@ -200,7 +159,7 @@ def terminal_log(
 
 @app.post("/terminal/send")
 def terminal_send(req: TerminalSendRequest) -> dict:
-    """Send bytes to the active HC-05 / serial port (TX)."""
+    """Send bytes to the active serial port (TX)."""
     if STATE.mode != "serial" or STATE.serial is None:
         raise HTTPException(status_code=400, detail="Not connected to serial.")
     payload = req.text.encode("utf-8", errors="replace")
@@ -237,13 +196,13 @@ def _parse_ts(ts: Optional[str]) -> Optional[datetime]:
 
 @app.get("/serial-test")
 def serial_test(
-    port: str = Query(description="Serial port path, e.g. /dev/tty.HC-05 or COM3"),
+    port: str = Query(description="Serial port path, e.g. /dev/tty.usbserial-* or COM3"),
     baudrate: int = Query(default=9600),
     duration: int = Query(default=5, ge=1, le=30, description="How many seconds to listen"),
 ) -> dict:
     """
     Open a serial port for a few seconds and return whatever raw bytes come in.
-    Useful for diagnosing whether the HC-05 / MCU is actually sending data.
+    Useful for diagnosing whether a device on the serial port is sending data.
     """
     import serial
     import time
@@ -284,7 +243,7 @@ def serial_test(
         "message": (
             f"Received {raw_bytes} bytes, {len(lines)} lines in {duration}s"
             if raw_bytes > 0
-            else f"No data received in {duration}s. Is your MCU sending data to the HC-05?"
+            else f"No data received in {duration}s. Is the device transmitting on this port?"
         ),
     }
 
@@ -296,7 +255,7 @@ def serial_send_test(
     message: str = Query(default="AT\r\n", description="Text to send"),
     wait: int = Query(default=3, ge=1, le=10, description="Seconds to wait for reply"),
 ) -> dict:
-    """Send text to serial port and capture any response. Used to diagnose HC-05 mode."""
+    """Send text to serial port and capture any response."""
     import serial
     import time
 

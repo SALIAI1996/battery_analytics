@@ -4,7 +4,7 @@ import threading
 from datetime import datetime
 from typing import Optional
 
-from .hc05_serial import HC05SerialStreamer
+from .serial_streamer import SerialTelemetryStreamer
 from .models import BatteryMetric
 from .ring_buffer import MetricsRingBuffer
 from .sim_device import SimulatedBatteryStreamer
@@ -15,7 +15,7 @@ class AppState:
     def __init__(self) -> None:
         self._lock = threading.Lock()
 
-        self.serial: HC05SerialStreamer | None = None
+        self.serial: SerialTelemetryStreamer | None = None
         self.sim: SimulatedBatteryStreamer | None = None
         self.thingspeak: ThingSpeakStreamer | None = None
 
@@ -54,7 +54,7 @@ class AppState:
         self.stop_all()
         with self._lock:
             self.buffer.clear()
-            self.serial = HC05SerialStreamer(port=port, baudrate=baudrate)
+            self.serial = SerialTelemetryStreamer(port=port, baudrate=baudrate)
             self.serial.start(self._on_metric)
             self.mode = "serial"
             self.active_device_id = port

@@ -15,6 +15,7 @@ build/
 # Node / Vite (React frontend)
 node_modules/
 frontend-react/dist/
+*.tsbuildinfo
 
 # IDE / OS
 .idea/
@@ -22,9 +23,6 @@ frontend-react/dist/
 .DS_Store
 *.swp
 *.swo
-
-# Streamlit / local
-.streamlit/secrets.toml
 
 # Env files (may contain secrets)
 .env

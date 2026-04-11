@@ -1,13 +1,7 @@
 """
-HC-05 Classic Bluetooth serial connection manager.
+Serial port streamer for UART telemetry (e.g. USB–UART adapter to a microcontroller).
 
-HC-05 modules pair with the OS and appear as serial ports:
-  macOS:   /dev/tty.HC-05-DevB  or  /dev/tty.HC-05-SPPDev
-  Linux:   /dev/rfcomm0
-  Windows: COM3, COM4, etc.
-
-Pair the HC-05 with your OS first (System Settings → Bluetooth → Pair).
-Then this module opens the serial port and reads UART lines continuously.
+Opens a serial device and reads ASCII lines continuously for battery-metric parsing.
 """
 
 from __future__ import annotations
@@ -42,9 +36,9 @@ def list_serial_ports() -> list[dict[str, str | None]]:
     return ports
 
 
-class HC05SerialStreamer:
+class SerialTelemetryStreamer:
     """
-    Opens a serial port (from a paired HC-05) and reads lines continuously.
+    Opens a serial port and reads lines continuously.
     Each line is parsed for battery metrics and pushed via the on_metric callback.
     """
 
@@ -55,7 +49,7 @@ class HC05SerialStreamer:
         self._stop = threading.Event()
         self._connected = threading.Event()
         self._streaming = threading.Event()
-        # Live RX/TX log (like Arduino Bluetooth Controller app)
+        # Live RX/TX log for debugging
         self._terminal_lock = threading.Lock()
         self._terminal: deque[dict[str, object]] = deque(maxlen=3_000)
         self._terminal_seq = 0
@@ -110,7 +104,7 @@ class HC05SerialStreamer:
         return out
 
     def write_bytes(self, data: bytes) -> tuple[bool, str]:
-        """Send data to HC-05 (TX). Thread-safe."""
+        """Send data on TX. Thread-safe."""
         if not data:
             return False, "Empty payload"
         with self._ser_lock:
