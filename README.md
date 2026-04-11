@@ -5,6 +5,18 @@ Optional: **HC-05 Bluetooth** serial for battery telemetry (same UI, different d
 
 Works on **macOS, Windows, and Linux** (and Streamlit Cloud for ThingSpeak-only use).
 
+### Deploy: GitHub → Render (API) + Vercel (React)
+
+| Piece | Where | Notes |
+|--------|--------|--------|
+| **Code** | GitHub | Push this repo; connect both hosts to the same repo. |
+| **Backend** | [Render](https://render.com) | Web service: `uvicorn backend.api:app --host 0.0.0.0 --port $PORT`. Use `render.yaml` (Blueprint) or create manually. Set `CORS_ORIGINS` to your Vercel URL(s), e.g. `https://your-app.vercel.app`. Optional: `THINGSPEAK_READ_API_KEY`. |
+| **Frontend** | [Vercel](https://vercel.com) | **Root directory:** `frontend-react`. Framework: Vite. Set **`VITE_API_URL`** to your Render API base (no trailing slash), e.g. `https://environmental-analytics-api.onrender.com`. |
+
+After deploy, open the Vercel URL and use **Connect ThingSpeak** in the React UI. The legacy **Streamlit** app (`frontend/app.py`) remains for local Bluetooth/serial workflows.
+
+**Local full-stack dev:** Terminal 1: `uvicorn backend.api:app --reload --port 8004`. Terminal 2: `cd frontend-react && npm run dev` — the Vite dev server proxies `/api/*` to `http://127.0.0.1:8004`, so leave `VITE_API_URL` unset.
+
 ### How it works (ThingSpeak)
 
 ```
@@ -12,7 +24,7 @@ Sensors / MCU ──▶ ThingSpeak ── HTTPS JSON API ──▶ FastAPI polle
                                                           │
                                                  metrics ring buffer
                                                           │
-                                                 Streamlit + Plotly UI
+                                                 Streamlit / React + charts
 ```
 
 ### ThingSpeak setup
