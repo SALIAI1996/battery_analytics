@@ -32,6 +32,16 @@ log = logging.getLogger(__name__)
 _MAC_RE = re.compile(r"^([0-9A-Fa-f]{2}[:\-]){5}[0-9A-Fa-f]{2}$")
 _SYSTEM = platform.system()
 
+# Shown when Linux has no bluetoothctl (Streamlit Cloud, Docker, most VPS — no BT adapter)
+_MSG_LINUX_NO_BTCTL = (
+    "Bluetooth pairing from this server is not available. "
+    "Hosted apps (e.g. Streamlit Cloud) run in a data center with no Bluetooth radio and no access to your phone’s Bluetooth.\n\n"
+    "What you can do:\n"
+    "• Pair the HC-05 on your Android phone in Settings → Bluetooth (PIN 1234), then use a Bluetooth serial app on the phone to talk to the module, OR\n"
+    "• Run this project on your Mac/PC (locally) where the OS can pair HC-05 and expose a serial port.\n\n"
+    "From this browser you can still use **Simulated Battery** to try the dashboard."
+)
+
 
 def _normalise_mac(addr: str) -> str:
     addr = addr.strip().upper().replace("-", ":")
@@ -284,7 +294,7 @@ def _linux_pair_and_connect(mac: str, pin: str = "1234") -> PairResult:
         return PairResult(
             mac=mac, already_paired=False, paired=False, connected=False,
             serial_port=None,
-            message="bluetoothctl not found. Install bluez package.",
+            message=_MSG_LINUX_NO_BTCTL,
         )
 
     try:

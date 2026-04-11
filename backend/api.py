@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import logging
+import platform
+import shutil
 from datetime import datetime
 from typing import Optional
 
@@ -31,7 +33,20 @@ app.add_middleware(
 
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True}
+    """Includes whether this host can run MAC-pairing / bluetoothctl (false on Streamlit Cloud)."""
+    sysname = platform.system()
+    tools = False
+    if sysname == "Darwin":
+        tools = bool(shutil.which("blueutil"))
+    elif sysname == "Linux":
+        tools = bool(shutil.which("bluetoothctl"))
+    elif sysname == "Windows":
+        tools = True
+    return {
+        "ok": True,
+        "platform": sysname,
+        "server_bluetooth_cli_available": tools,
+    }
 
 
 @app.get("/serial-ports", response_model=list[SerialPortInfo])

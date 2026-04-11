@@ -126,6 +126,14 @@ with st.sidebar:
     st.divider()
     st.subheader("Bluetooth Pairing")
 
+    with st.expander("Using Android / iPhone or Streamlit Cloud?", expanded=False):
+        st.markdown(
+            "Pairing and serial ports run on the **computer that hosts this app**, not on your "
+            "phone. **Streamlit Cloud** has **no Bluetooth** (you may see a message about that) — "
+            "use **Simulated Battery** to demo the UI, or install and run the app on your **Mac/PC** "
+            "where you can pair the HC-05 and see a real serial port."
+        )
+
     if st.button("📡 Scan Nearby Bluetooth", use_container_width=True):
         with st.spinner("Scanning for Bluetooth devices (~8 sec)…"):
             try:

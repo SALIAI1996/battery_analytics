@@ -45,6 +45,7 @@ pip install -r requirements.txt
 2. **Python:** 3.11+ recommended.
 3. The UI **starts FastAPI inside the same app** so `localhost:8004` works on Cloud (no second service).
 4. **Optional secrets** (app settings → Secrets): `BACKEND_URL` = your API URL if you host the backend elsewhere; or `NO_EMBED_FASTAPI=true` with `BACKEND_URL` pointing to that API.
+5. **Phone browser:** the hosted app **cannot** use your phone’s Bluetooth or pair an HC-05. Use **Simulated Battery** on the phone, or run the project on a **PC** with the module paired there.
 
 ### Pair HC-05 with your OS
 
