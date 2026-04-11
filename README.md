@@ -1,10 +1,43 @@
-## Battery Analytics — HC-05 Bluetooth + Streamlit + Plotly
+## Environmental analytics — ThingSpeak + Streamlit + Plotly
 
-Real-time battery monitoring dashboard using an **HC-05 Bluetooth module** (Classic Bluetooth / Serial Port Profile).
+Primary mode: **ThingSpeak** channel feeds (temperature, humidity, TDS, pH, optional water quality).  
+Optional: **HC-05 Bluetooth** serial for battery telemetry (same UI, different data path).
 
-Works on **macOS, Windows, and Linux**.
+Works on **macOS, Windows, and Linux** (and Streamlit Cloud for ThingSpeak-only use).
 
-### How it works
+### How it works (ThingSpeak)
+
+```
+Sensors / MCU ──▶ ThingSpeak ── HTTPS JSON API ──▶ FastAPI poller
+                                                          │
+                                                 metrics ring buffer
+                                                          │
+                                                 Streamlit + Plotly UI
+```
+
+### ThingSpeak setup
+
+1. In the sidebar, enter your **Channel ID** and **Read API key** (or set `THINGSPEAK_READ_API_KEY` in the environment / Streamlit secrets and leave the key blank).
+2. Click **Connect ThingSpeak**. The backend loads recent history (`initial_results`) and polls the [Channel Feed API](https://www.mathworks.com/help/thingspeak/readdata.html) on a fixed interval.
+
+**Default field mapping** (ThingSpeak fields 1–5):
+
+| Field | Quantity        |
+|------|-----------------|
+| 1    | Temperature (°C) |
+| 2    | Humidity (%)     |
+| 3    | TDS              |
+| 4    | pH               |
+| 5    | Water quality (optional index) |
+
+**API examples** (replace keys with your own):
+
+- `GET https://api.thingspeak.com/channels/<ID>/feeds.json?api_key=<READ_KEY>&results=2`
+- `GET https://api.thingspeak.com/channels/<ID>/fields/1.json?api_key=<READ_KEY>&results=2`
+
+Backend route: `POST /connect-thingspeak` with JSON `channel_id`, `read_api_key`, `poll_interval_sec`, `initial_results`.
+
+### How it works (HC-05 — optional)
 
 ```
 Battery MCU ──UART──▶ HC-05 ──Bluetooth SPP──▶ macOS/Linux/Windows
@@ -18,6 +51,7 @@ Battery MCU ──UART──▶ HC-05 ──Bluetooth SPP──▶ macOS/Linux/W
 ```
 
 ### What you get
+- **ThingSpeak integration** — poll channel feeds, trends, and simple text insights for water / environment metrics
 - **MAC address pairing** — enter HC-05 MAC address directly to pair and connect
 - **Bluetooth scan** — discover nearby Bluetooth devices
 - **Serial port discovery** — lists all ports; pick your HC-05
@@ -81,6 +115,13 @@ streamlit run frontend/app.py
 ```
 
 ### In the UI
+
+**ThingSpeak (recommended for hosted / cloud):**
+1. Enter **Channel ID** and **Read API key** (or rely on `THINGSPEAK_READ_API_KEY`).
+2. Adjust poll interval and how many past points to load.
+3. Click **Connect ThingSpeak** and watch **Live telemetry**.
+
+**Bluetooth / serial (battery pack):**
 
 **Option A — Pair by MAC (easiest):**
 1. Enter HC-05 MAC address (e.g. `00:23:09:01:5A:78`)

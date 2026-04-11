@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field
 class BatteryMetric(BaseModel):
     ts: datetime = Field(description="UTC timestamp")
     device_id: str
-    voltage_v: float = Field(description="Pack / total voltage")
+    voltage_v: float = Field(description="Pack / total voltage (0 when source is ThingSpeak)")
     current_a: float = 0.0
     temperature_c: float = 0.0
     soc_pct: Optional[float] = None
@@ -17,8 +17,15 @@ class BatteryMetric(BaseModel):
         default=None,
         description='Per-cell voltages, e.g. {"V1": 3.65, "V2": 3.64, ...}',
     )
+    humidity_pct: Optional[float] = Field(default=None, description="Relative humidity % (ThingSpeak field2)")
+    tds_ppm: Optional[float] = Field(default=None, description="TDS (ThingSpeak field3)")
+    ph: Optional[float] = Field(default=None, description="pH (ThingSpeak field4)")
+    water_quality_index: Optional[float] = Field(
+        default=None,
+        description="Optional water quality score (ThingSpeak field5 if present)",
+    )
     raw_line: Optional[str] = Field(default=None, description="Raw UART line for debugging")
-    source: Literal["ble", "serial", "sim"] = "serial"
+    source: Literal["ble", "serial", "sim", "thingspeak"] = "serial"
 
 
 class SerialPortInfo(BaseModel):
@@ -51,7 +58,17 @@ class StatusResponse(BaseModel):
     active_device_id: str | None
     connected: bool
     streaming: bool
-    mode: Literal["serial", "sim", "none"]
+    mode: Literal["serial", "sim", "none", "thingspeak"]
+
+
+class ThingSpeakConnectRequest(BaseModel):
+    channel_id: int = Field(default=3269475, description="ThingSpeak channel ID")
+    read_api_key: str = Field(
+        default="",
+        description="Read API key; if empty, uses env THINGSPEAK_READ_API_KEY",
+    )
+    poll_interval_sec: float = Field(default=15.0, ge=5.0, le=3600.0)
+    initial_results: int = Field(default=500, ge=1, le=8000, description="How many past points to load on connect")
 
 
 class PairRequest(BaseModel):

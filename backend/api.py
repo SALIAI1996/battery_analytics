@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import platform
 import shutil
 from datetime import datetime
@@ -16,11 +17,11 @@ from .hc05_serial import list_serial_ports
 from .models import (
     ConnectRequest, ConnectResponse, DiscoveredDevice,
     LatestResponse, PairRequest, PairResponse, SerialPortInfo, StatusResponse,
-    TerminalSendRequest,
+    TerminalSendRequest, ThingSpeakConnectRequest,
 )
 from .state import STATE
 
-app = FastAPI(title="Battery Analytics Backend", version="0.2.0")
+app = FastAPI(title="Environmental Analytics Backend", version="0.3.0")
 
 app.add_middleware(
     CORSMiddleware,
@@ -113,6 +114,40 @@ def pair_bluetooth(req: PairRequest) -> PairResponse:
         raise HTTPException(status_code=422, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=500, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _resolve_thingspeak_key(req: ThingSpeakConnectRequest) -> str:
+    key = (req.read_api_key or "").strip()
+    if key:
+        return key
+    env_key = (os.environ.get("THINGSPEAK_READ_API_KEY") or "").strip()
+    if env_key:
+        return env_key
+    raise HTTPException(
+        status_code=422,
+        detail="ThingSpeak read API key required: set read_api_key in the request or THINGSPEAK_READ_API_KEY in the environment.",
+    )
+
+
+@app.post("/connect-thingspeak", response_model=ConnectResponse)
+def connect_thingspeak(req: ThingSpeakConnectRequest) -> ConnectResponse:
+    """Subscribe to a ThingSpeak channel feed (replaces serial/BT as the active data source)."""
+    key = _resolve_thingspeak_key(req)
+    try:
+        STATE.connect_thingspeak(
+            req.channel_id,
+            key,
+            poll_interval_sec=req.poll_interval_sec,
+            initial_results=req.initial_results,
+        )
+        dev = STATE.active_device_id or f"thingspeak:{req.channel_id}"
+        return ConnectResponse(
+            device_id=dev,
+            connected=True,
+            message=f"ThingSpeak channel {req.channel_id}: loading up to {req.initial_results} points, then polling every {req.poll_interval_sec:.0f}s.",
+        )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

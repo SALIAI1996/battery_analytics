@@ -16,7 +16,7 @@ import requests
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
-st.set_page_config(page_title="Battery Analytics — HC-05", page_icon="🔋", layout="wide")
+st.set_page_config(page_title="Environmental Analytics — ThingSpeak", page_icon="💧", layout="wide")
 
 
 @st.cache_resource
@@ -100,15 +100,69 @@ for key, default in [
     ("bt_scan", []),
     ("term_since_id", 0),
     ("term_display", ""),
+    ("ts_poll_sec", 15.0),
+    ("ts_initial", 500),
 ]:
     st.session_state.setdefault(key, default)
 
 # ── Sidebar ──────────────────────────────────────────────────────────────────
 
 with st.sidebar:
-    st.header("HC-05 Connection")
+    st.header("Data source")
     st.caption(f"Backend → `{backend_base_url()}`")
 
+    st.subheader("ThingSpeak (cloud)")
+    st.caption(
+        "Channel fields: **1** Temperature · **2** Humidity · **3** TDS · **4** pH · **5** water quality (optional)"
+    )
+    ts_channel = st.number_input("Channel ID", min_value=1, value=3269475, step=1, key="ts_channel")
+    ts_key = st.text_input(
+        "Read API key",
+        type="password",
+        value=os.environ.get("THINGSPEAK_READ_API_KEY", ""),
+        help="Paste your ThingSpeak **Read** key, or set THINGSPEAK_READ_API_KEY / Streamlit secrets.",
+        autocomplete="off",
+    )
+    ts_poll = st.slider("Poll interval (sec)", 5, 120, int(st.session_state.get("ts_poll_sec", 15)), 1)
+    st.session_state["ts_poll_sec"] = float(ts_poll)
+    ts_hist = st.slider("Initial history (points)", 50, 8000, int(st.session_state.get("ts_initial", 500)), 50)
+    st.session_state["ts_initial"] = ts_hist
+
+    ts_col1, ts_col2 = st.columns(2)
+    with ts_col1:
+        ts_connect = st.button("Connect ThingSpeak", type="primary", use_container_width=True)
+    with ts_col2:
+        ts_disconnect = st.button("Disconnect", use_container_width=True, key="ts_disc")
+
+    if ts_connect:
+        with st.spinner("Connecting to ThingSpeak…"):
+            try:
+                payload = {
+                    "channel_id": int(ts_channel),
+                    "read_api_key": (ts_key or "").strip(),
+                    "poll_interval_sec": float(ts_poll),
+                    "initial_results": int(ts_hist),
+                }
+                resp = api_post("/connect-thingspeak", json=payload)
+                st.session_state["points"] = []
+                st.session_state["last_ts"] = None
+                st.session_state["term_since_id"] = 0
+                st.session_state["term_display"] = ""
+                st.success(resp.get("message", "Connected to ThingSpeak."))
+            except Exception as exc:
+                st.error(f"ThingSpeak connect failed: {exc}")
+
+    if ts_disconnect:
+        try:
+            api_post("/disconnect")
+            st.session_state["points"] = []
+            st.session_state["last_ts"] = None
+            st.info("Disconnected.")
+        except Exception as exc:
+            st.error(f"Disconnect failed: {exc}")
+
+    st.divider()
+    st.header("Bluetooth / serial (optional)")
     with st.expander("Setup guide", expanded=False):
         st.markdown(
             "**Option A — USB serial cable (recommended on Mac):**\n"
@@ -328,7 +382,7 @@ with st.sidebar:
 
 # ── Main area ────────────────────────────────────────────────────────────────
 
-st.title("Battery Analytics — HC-05")
+st.title("Environmental analytics — ThingSpeak")
 
 try:
     status = api_get("/status")
@@ -401,6 +455,11 @@ if status.get("mode") == "serial" and status.get("active_device_id"):
         st.session_state.get("term_display") or "— Waiting for serial data… Connect PIC TX → HC-05 RX. —",
         language="text",
     )
+elif status.get("mode") == "thingspeak":
+    st.info(
+        "Using **ThingSpeak** for telemetry. Sensor data appears below under **Live telemetry** "
+        "after the first poll (see poll interval in the sidebar)."
+    )
 else:
     st.info(
         "Connect to an **HC-05 / serial port** in the sidebar to see a live stream here "
@@ -426,8 +485,30 @@ if status.get("streaming") and status.get("active_device_id"):
 
 points: list[dict] = st.session_state["points"]
 
+def _fmt_opt(v: Any, nd: int = 2) -> str:
+    if v is None:
+        return "—"
+    try:
+        return f"{float(v):.{nd}f}"
+    except (TypeError, ValueError):
+        return "—"
+
+
+def _any_series(points: list[dict], key: str) -> bool:
+    for p in points:
+        v = p.get(key)
+        if v is not None:
+            return True
+    return False
+
+
 if not points:
-    if status.get("streaming") and status.get("mode") == "serial":
+    if status.get("streaming") and status.get("mode") == "thingspeak":
+        st.warning(
+            "**ThingSpeak is connected — waiting for the first samples.**\n\n"
+            "If this persists, check the channel ID, read API key, and that your channel has recent feeds."
+        )
+    elif status.get("streaming") and status.get("mode") == "serial":
         st.warning(
             "**Serial port is open but no data received yet.**\n\n"
             "Your HC-05 is connected, but your MCU needs to send data over UART. "
@@ -438,84 +519,199 @@ if not points:
             "Use the **Test Serial Port** button in the sidebar to check for incoming data."
         )
     else:
-        st.info("No data yet — connect to a device to start streaming.")
+        st.info("No data yet — connect to **ThingSpeak** or a **serial / simulated** device in the sidebar.")
 else:
     last = points[-1]
+    is_thingspeak = last.get("source") == "thingspeak"
 
-    # ── Summary metrics ──────────────────────────────────────────────────
-    m1, m2, m3, m4 = st.columns(4)
-    m1.metric("Pack Voltage (V)", f'{last["voltage_v"]:.2f}')
-    m2.metric("Current (A)", f'{last["current_a"]:.2f}')
-    m3.metric("Temp (°C)", f'{last["temperature_c"]:.2f}')
-    soc = last.get("soc_pct")
-    m4.metric("SOC (%)", f"{soc:.1f}" if soc is not None else "—")
+    if is_thingspeak:
+        st.subheader("Latest sensor readings")
+        e1, e2, e3, e4, e5 = st.columns(5)
+        e1.metric("Temperature (°C)", _fmt_opt(last.get("temperature_c")))
+        e2.metric("Humidity (%)", _fmt_opt(last.get("humidity_pct")))
+        e3.metric("TDS", _fmt_opt(last.get("tds_ppm"), 1))
+        e4.metric("pH", _fmt_opt(last.get("ph"), 2))
+        e5.metric("Water quality", _fmt_opt(last.get("water_quality_index"), 2))
 
-    # ── Per-cell voltages (V1, V2, V3, V4…) ─────────────────────────────
-    cells = last.get("cell_voltages")
-    if cells:
-        st.subheader("Cell voltages")
-        cell_keys = sorted(cells.keys(), key=lambda k: int(k[1:]) if k[1:].isdigit() else 0)
-        cols = st.columns(len(cell_keys))
-        for col, ck in zip(cols, cell_keys):
-            col.metric(ck, f"{cells[ck]:.3f} V")
+        st.subheader("Trends")
+        ts_x = [p["ts"] for p in points]
 
-        # Per-cell chart over time
-        fig_cells = go.Figure()
-        all_cell_keys: set[str] = set()
-        for p in points:
-            cv = p.get("cell_voltages")
-            if cv:
-                all_cell_keys.update(cv.keys())
-        for ck in sorted(all_cell_keys, key=lambda k: int(k[1:]) if k[1:].isdigit() else 0):
-            ts_c = []
-            vs_c = []
-            for p in points:
-                cv = p.get("cell_voltages")
-                if cv and ck in cv:
-                    ts_c.append(p["ts"])
-                    vs_c.append(cv[ck])
-            fig_cells.add_trace(go.Scatter(x=ts_c, y=vs_c, mode="lines", name=ck))
-
-        fig_cells.update_layout(
-            title="Cell Voltages Over Time",
-            height=400,
-            margin=dict(l=20, r=20, t=40, b=20),
+        fig_e = go.Figure()
+        if _any_series(points, "temperature_c"):
+            fig_e.add_trace(
+                go.Scatter(
+                    x=ts_x,
+                    y=[p.get("temperature_c") for p in points],
+                    mode="lines",
+                    name="Temperature (°C)",
+                )
+            )
+        if _any_series(points, "humidity_pct"):
+            fig_e.add_trace(
+                go.Scatter(
+                    x=ts_x,
+                    y=[p.get("humidity_pct") for p in points],
+                    mode="lines",
+                    name="Humidity (%)",
+                    yaxis="y2",
+                )
+            )
+        layout_e: dict[str, Any] = dict(
+            height=420,
+            margin=dict(l=20, r=20, t=30, b=20),
             legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
             xaxis=dict(title="Time"),
-            yaxis=dict(title="Cell Voltage (V)"),
+            yaxis=dict(title="Temperature (°C)", side="left"),
+            yaxis2=dict(title="Humidity (%)", overlaying="y", side="right"),
         )
-        st.plotly_chart(fig_cells, use_container_width=True)
+        fig_e.update_layout(**layout_e)
+        st.plotly_chart(fig_e, use_container_width=True)
 
-    # ── Pack voltage / current / temp chart ──────────────────────────────
-    st.subheader("Pack overview")
-    ts = [p["ts"] for p in points]
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=ts, y=[p["voltage_v"] for p in points], mode="lines", name="Pack Voltage (V)"))
-    fig.add_trace(go.Scatter(
-        x=ts, y=[p["current_a"] for p in points], mode="lines", name="Current (A)", yaxis="y2"
-    ))
-    fig.add_trace(go.Scatter(
-        x=ts, y=[p["temperature_c"] for p in points], mode="lines", name="Temp (°C)", yaxis="y3"
-    ))
-    socs = [p.get("soc_pct") for p in points]
-    if any(s is not None for s in socs):
-        fig.add_trace(go.Scatter(x=ts, y=socs, mode="lines", name="SOC (%)", yaxis="y4"))
+        fig_w = go.Figure()
+        if _any_series(points, "tds_ppm"):
+            fig_w.add_trace(
+                go.Scatter(
+                    x=ts_x,
+                    y=[p.get("tds_ppm") for p in points],
+                    mode="lines",
+                    name="TDS",
+                )
+            )
+        if _any_series(points, "ph"):
+            fig_w.add_trace(
+                go.Scatter(
+                    x=ts_x,
+                    y=[p.get("ph") for p in points],
+                    mode="lines",
+                    name="pH",
+                    yaxis="y2",
+                )
+            )
+        if _any_series(points, "water_quality_index"):
+            fig_w.add_trace(
+                go.Scatter(
+                    x=ts_x,
+                    y=[p.get("water_quality_index") for p in points],
+                    mode="lines",
+                    name="Water quality",
+                    yaxis="y3",
+                )
+            )
+        if fig_w.data:
+            fig_w.update_layout(
+                height=400,
+                margin=dict(l=20, r=20, t=30, b=20),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                xaxis=dict(title="Time"),
+                yaxis=dict(title="TDS", side="left"),
+                yaxis2=dict(title="pH", overlaying="y", side="right"),
+                yaxis3=dict(title="Water quality", overlaying="y", side="right", position=0.95),
+            )
+            st.plotly_chart(fig_w, use_container_width=True)
 
-    fig.update_layout(
-        height=450,
-        margin=dict(l=20, r=20, t=30, b=20),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
-        xaxis=dict(title="Time", showgrid=True),
-        yaxis=dict(title="Voltage (V)", side="left"),
-        yaxis2=dict(title="Current (A)", overlaying="y", side="right", showgrid=False),
-        yaxis3=dict(title="Temp (°C)", overlaying="y", side="right", position=0.95, showgrid=False),
-        yaxis4=dict(title="SOC (%)", overlaying="y", side="right", position=0.90, showgrid=False),
-    )
-    st.plotly_chart(fig, use_container_width=True)
+        with st.expander("Insights (from recent window)"):
+            try:
+                temps = [float(p["temperature_c"]) for p in points if p.get("temperature_c") is not None]
+                phs = [float(p["ph"]) for p in points if p.get("ph") is not None]
+                tds = [float(p["tds_ppm"]) for p in points if p.get("tds_ppm") is not None]
+                if temps:
+                    st.write(
+                        f"- **Temperature** min / max: **{min(temps):.2f}** / **{max(temps):.2f}** °C "
+                        f"(last **{temps[-1]:.2f}** °C)."
+                    )
+                if phs:
+                    st.write(
+                        f"- **pH** min / max: **{min(phs):.2f}** / **{max(phs):.2f}** "
+                        f"(typical safe drinking range often ~6.5–8.5; calibrate to your application)."
+                    )
+                if tds:
+                    st.write(
+                        f"- **TDS** min / max: **{min(tds):.0f}** / **{max(tds):.0f}** ppm "
+                        f"(interpretation depends on your calibration and water type)."
+                    )
+                if not temps and not phs and not tds:
+                    st.caption("Not enough numeric fields in this window yet (check ThingSpeak field mapping).")
+            except Exception as exc:
+                st.caption(f"Could not compute insights: {exc}")
 
-    # ── Raw debug line ───────────────────────────────────────────────────
-    if last.get("raw_line"):
-        with st.expander("Last raw UART line"):
-            st.code(last["raw_line"])
+        if last.get("raw_line"):
+            with st.expander("Last feed metadata"):
+                st.code(last["raw_line"])
+    else:
+        # ── Summary metrics (battery / serial / sim) ───────────────────────
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Pack Voltage (V)", f'{last["voltage_v"]:.2f}')
+        m2.metric("Current (A)", f'{last["current_a"]:.2f}')
+        m3.metric("Temp (°C)", f'{last["temperature_c"]:.2f}')
+        soc = last.get("soc_pct")
+        m4.metric("SOC (%)", f"{soc:.1f}" if soc is not None else "—")
+
+        # ── Per-cell voltages (V1, V2, V3, V4…) ─────────────────────────────
+        cells = last.get("cell_voltages")
+        if cells:
+            st.subheader("Cell voltages")
+            cell_keys = sorted(cells.keys(), key=lambda k: int(k[1:]) if k[1:].isdigit() else 0)
+            cols = st.columns(len(cell_keys))
+            for col, ck in zip(cols, cell_keys):
+                col.metric(ck, f"{cells[ck]:.3f} V")
+
+            # Per-cell chart over time
+            fig_cells = go.Figure()
+            all_cell_keys: set[str] = set()
+            for p in points:
+                cv = p.get("cell_voltages")
+                if cv:
+                    all_cell_keys.update(cv.keys())
+            for ck in sorted(all_cell_keys, key=lambda k: int(k[1:]) if k[1:].isdigit() else 0):
+                ts_c = []
+                vs_c = []
+                for p in points:
+                    cv = p.get("cell_voltages")
+                    if cv and ck in cv:
+                        ts_c.append(p["ts"])
+                        vs_c.append(cv[ck])
+                fig_cells.add_trace(go.Scatter(x=ts_c, y=vs_c, mode="lines", name=ck))
+
+            fig_cells.update_layout(
+                title="Cell Voltages Over Time",
+                height=400,
+                margin=dict(l=20, r=20, t=40, b=20),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+                xaxis=dict(title="Time"),
+                yaxis=dict(title="Cell Voltage (V)"),
+            )
+            st.plotly_chart(fig_cells, use_container_width=True)
+
+        # ── Pack voltage / current / temp chart ──────────────────────────────
+        st.subheader("Pack overview")
+        ts = [p["ts"] for p in points]
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=ts, y=[p["voltage_v"] for p in points], mode="lines", name="Pack Voltage (V)"))
+        fig.add_trace(go.Scatter(
+            x=ts, y=[p["current_a"] for p in points], mode="lines", name="Current (A)", yaxis="y2"
+        ))
+        fig.add_trace(go.Scatter(
+            x=ts, y=[p["temperature_c"] for p in points], mode="lines", name="Temp (°C)", yaxis="y3"
+        ))
+        socs = [p.get("soc_pct") for p in points]
+        if any(s is not None for s in socs):
+            fig.add_trace(go.Scatter(x=ts, y=socs, mode="lines", name="SOC (%)", yaxis="y4"))
+
+        fig.update_layout(
+            height=450,
+            margin=dict(l=20, r=20, t=30, b=20),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
+            xaxis=dict(title="Time", showgrid=True),
+            yaxis=dict(title="Voltage (V)", side="left"),
+            yaxis2=dict(title="Current (A)", overlaying="y", side="right", showgrid=False),
+            yaxis3=dict(title="Temp (°C)", overlaying="y", side="right", position=0.95, showgrid=False),
+            yaxis4=dict(title="SOC (%)", overlaying="y", side="right", position=0.90, showgrid=False),
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
+        # ── Raw debug line ───────────────────────────────────────────────────
+        if last.get("raw_line"):
+            with st.expander("Last raw UART line"):
+                st.code(last["raw_line"])
 
 st.caption(f"Tick: {datetime.now(timezone.utc).strftime('%H:%M:%S')} UTC")

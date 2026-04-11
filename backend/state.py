@@ -8,6 +8,7 @@ from .hc05_serial import HC05SerialStreamer
 from .models import BatteryMetric
 from .ring_buffer import MetricsRingBuffer
 from .sim_device import SimulatedBatteryStreamer
+from .thingspeak_streamer import ThingSpeakStreamer
 
 
 class AppState:
@@ -16,10 +17,11 @@ class AppState:
 
         self.serial: HC05SerialStreamer | None = None
         self.sim: SimulatedBatteryStreamer | None = None
+        self.thingspeak: ThingSpeakStreamer | None = None
 
         self.buffer = MetricsRingBuffer(maxlen=10_000)
 
-        self.mode: str = "none"  # "serial" | "sim" | "none"
+        self.mode: str = "none"  # "serial" | "sim" | "thingspeak" | "none"
         self.active_device_id: str | None = None
 
     def _on_metric(self, m: BatteryMetric) -> None:
@@ -33,6 +35,9 @@ class AppState:
             if self.sim:
                 self.sim.stop()
                 self.sim = None
+            if self.thingspeak:
+                self.thingspeak.stop()
+                self.thingspeak = None
             self.mode = "none"
             self.active_device_id = None
 
@@ -54,6 +59,27 @@ class AppState:
             self.mode = "serial"
             self.active_device_id = port
 
+    def connect_thingspeak(
+        self,
+        channel_id: int,
+        read_api_key: str,
+        *,
+        poll_interval_sec: float = 15.0,
+        initial_results: int = 500,
+    ) -> None:
+        self.stop_all()
+        with self._lock:
+            self.buffer.clear()
+            self.thingspeak = ThingSpeakStreamer(
+                channel_id,
+                read_api_key,
+                poll_interval_sec=poll_interval_sec,
+                initial_results=initial_results,
+            )
+            self.thingspeak.start(self._on_metric)
+            self.mode = "thingspeak"
+            self.active_device_id = self.thingspeak.device_id
+
     def status(self) -> dict:
         with self._lock:
             if self.mode == "sim":
@@ -62,6 +88,9 @@ class AppState:
             elif self.mode == "serial":
                 connected = bool(self.serial and self.serial.connected)
                 streaming = bool(self.serial and self.serial.streaming)
+            elif self.mode == "thingspeak":
+                connected = bool(self.thingspeak and self.thingspeak.running)
+                streaming = connected
             else:
                 connected = False
                 streaming = False
