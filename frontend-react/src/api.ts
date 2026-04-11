@@ -1,8 +1,13 @@
 /** Base URL for FastAPI (Render). In dev, use Vite proxy: leave empty and use /api prefix. */
 export function apiBase(): string {
   const env = import.meta.env.VITE_API_URL?.trim();
-  if (env) return env.replace(/\/$/, "");
-  return "";
+  if (!env) return "";
+  let base = env.replace(/\/$/, "");
+  // Accept "api.onrender.com" without scheme (common misconfig)
+  if (base && !/^https?:\/\//i.test(base)) {
+    base = `https://${base}`;
+  }
+  return base;
 }
 
 /** When no VITE_API_URL, dev server proxies /api → backend */

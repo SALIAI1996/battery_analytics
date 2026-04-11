@@ -28,6 +28,59 @@ After deploy, open the Vercel URL and use **Connect ThingSpeak** in the React UI
 
 **Frontend (`frontend-react/.env`):** `VITE_API_URL` = your deployed API base URL (e.g. Render). Leave empty locally so Vite’s dev proxy is used.
 
+### Deploy the frontend on Vercel (CLI)
+
+1. **Backend first:** Deploy the FastAPI app on [Render](https://render.com) (or similar) and copy the public API URL (no trailing slash), e.g. `https://your-api.onrender.com`.
+
+2. **Bearer token (API / SDK):** In Vercel: **Account Settings → Tokens** → create a token. Use it with the [Vercel REST API](https://vercel.com/docs/rest-api) or the [Vercel SDK](https://vercel.com/docs/sdk) (`@vercel/sdk`) as `bearerToken`. For normal CLI deploys you usually run **`vercel login`** instead (browser OAuth); the token is mainly for CI/CD and programmatic calls.
+
+3. **CLI:** Deploy scripts use **`npx vercel@latest`** (no global install). Ensure dependencies are installed: `cd frontend-react && npm install`.
+
+4. **Link and deploy (production):**
+
+   ```bash
+   cd frontend-react
+   npx vercel link          # connect this folder to a Vercel project (first time)
+   npx vercel env add VITE_API_URL production
+   # paste your Render API URL when prompted, e.g. https://your-api.onrender.com
+   npx vercel --prod        # or: npm run deploy:prod
+   ```
+
+5. **CORS:** On Render, set **`CORS_ORIGINS`** to your Vercel production URL (and preview URLs if you use PR previews), comma-separated.
+
+#### Custom environments (e.g. staging)
+
+Create a custom environment in the Vercel dashboard (**Project → Settings → Environments**) or via the API/SDK, then use the CLI:
+
+```bash
+# Deploy to a custom environment named "staging"
+npx vercel deploy --target=staging
+
+# Pull env vars from that environment into .env.local (optional)
+npx vercel pull --environment=staging
+
+# Add VITE_API_URL for staging (point at a staging API if you have one)
+npx vercel env add VITE_API_URL staging
+```
+
+**SDK example** (optional — for automation only; keep tokens out of git):
+
+```ts
+import { Vercel } from "@vercel/sdk";
+
+const vercel = new Vercel({ bearerToken: process.env.VERCEL_TOKEN! });
+
+await vercel.environment.createCustomEnvironment({
+  idOrName: "your-project-name-or-id",
+  requestBody: {
+    slug: "staging",
+    description: "Staging — API on a separate Render service",
+  },
+});
+```
+
+Install the SDK with: `npm install @vercel/sdk` in a private tooling folder or CI job, not required for the app itself.
+
 ### How it works (ThingSpeak)
 
 ```

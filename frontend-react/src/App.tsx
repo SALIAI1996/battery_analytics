@@ -159,8 +159,27 @@ export default function App() {
       <header className="header">
         <h1>Environmental analytics</h1>
         <p>
-          React UI for ThingSpeak-backed telemetry. Backend runs on Render; configure{" "}
-          <code className="mono">VITE_API_URL</code> on Vercel.
+          React UI for ThingSpeak-backed telemetry. Point <code className="mono">VITE_API_URL</code> at your API
+          origin only (e.g. <code className="mono">https://battery-analytics.onrender.com</code>) — no{" "}
+          <code className="mono">/api</code> suffix. The site root <code className="mono">/</code> is not the data
+          API; use{" "}
+          {apiBase() ? (
+            <>
+              <a href={`${apiBase()}/health`} target="_blank" rel="noreferrer">
+                /health
+              </a>{" "}
+              ·{" "}
+              <a href={`${apiBase()}/docs`} target="_blank" rel="noreferrer">
+                /docs
+              </a>
+            </>
+          ) : (
+            <span>
+              <code className="mono">/health</code> · <code className="mono">/docs</code> (set{" "}
+              <code className="mono">VITE_API_URL</code> for links)
+            </span>
+          )}
+          .
         </p>
       </header>
 

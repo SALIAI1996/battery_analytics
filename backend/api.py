@@ -34,13 +34,25 @@ def _cors_origins() -> list[str]:
     return [o.strip() for o in raw.split(",") if o.strip()]
 
 
+# Browsers reject credentialed CORS with wildcard origin; this API uses cookie-less fetch.
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins(),
-    allow_credentials=True,
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.get("/")
+def root() -> dict:
+    """Visiting the service root in a browser shows this instead of 404."""
+    return {
+        "service": "Environmental Analytics API",
+        "docs": "/docs",
+        "health": "/health",
+        "hint": "The React app calls /status, /connect-thingspeak, etc. — not GET /",
+    }
 
 
 @app.get("/health")

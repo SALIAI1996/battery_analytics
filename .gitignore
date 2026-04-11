@@ -16,6 +16,7 @@ build/
 node_modules/
 frontend-react/dist/
 *.tsbuildinfo
+.vercel/
 
 # IDE / OS
 .idea/
