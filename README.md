@@ -39,7 +39,15 @@ source .venv/bin/activate          # macOS/Linux
 pip install -r requirements.txt
 ```
 
+### Streamlit Community Cloud
+
+1. **Main file:** `frontend/app.py` (not the repo root).
+2. **Python:** 3.11+ recommended.
+3. The UI **starts FastAPI inside the same app** so `localhost:8004` works on Cloud (no second service).
+4. **Optional secrets** (app settings → Secrets): `BACKEND_URL` = your API URL if you host the backend elsewhere; or `NO_EMBED_FASTAPI=true` with `BACKEND_URL` pointing to that API.
+
 ### Pair HC-05 with your OS
+
 
 **macOS:**
 1. System Settings → Bluetooth → Pair (PIN `1234`)

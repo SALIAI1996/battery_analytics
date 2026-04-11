@@ -1,31 +1,94 @@
 from __future__ import annotations
 
 import os
+import pathlib
+import sys
 from datetime import datetime, timezone
 from typing import Any
+
+# Repo root (for `backend.*` imports when running `streamlit run frontend/app.py`)
+_ROOT = pathlib.Path(__file__).resolve().parent.parent
+if str(_ROOT) not in sys.path:
+    sys.path.insert(0, str(_ROOT))
 
 import plotly.graph_objects as go
 import requests
 import streamlit as st
 from streamlit_autorefresh import st_autorefresh
 
-BACKEND_PORT = os.environ.get("BACKEND_PORT", "8004")
-BACKEND_URL = os.environ.get("BACKEND_URL", f"http://localhost:{BACKEND_PORT}").rstrip("/")
+st.set_page_config(page_title="Battery Analytics — HC-05", page_icon="🔋", layout="wide")
+
+
+@st.cache_resource
+def _start_embedded_fastapi() -> str:
+    """
+    Streamlit Community Cloud runs only this process — no separate uvicorn.
+    Start FastAPI in a background thread so the UI can reach /status, /connect, etc.
+    """
+    import socket
+    import threading
+    import time
+
+    import uvicorn
+
+    from backend.api import app as fastapi_app
+
+    port = int(os.environ.get("FASTAPI_EMBED_PORT", os.environ.get("BACKEND_PORT", "8004")))
+    host = "127.0.0.1"
+
+    def _serve() -> None:
+        cfg = uvicorn.Config(
+            fastapi_app,
+            host=host,
+            port=port,
+            log_level="warning",
+            access_log=False,
+        )
+        uvicorn.Server(cfg).run()
+
+    threading.Thread(target=_serve, daemon=True, name="battery-analytics-api").start()
+
+    deadline = time.time() + 20.0
+    while time.time() < deadline:
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(0.25)
+            sock.connect((host, port))
+            sock.close()
+            return f"http://{host}:{port}"
+        except OSError:
+            time.sleep(0.12)
+    return f"http://{host}:{port}"
+
+
+def _ensure_backend_url() -> None:
+    """Use BACKEND_URL from secrets/env if set; otherwise embed FastAPI (Cloud-friendly)."""
+    if os.environ.get("BACKEND_URL", "").strip():
+        return
+    if os.environ.get("NO_EMBED_FASTAPI", "").lower() in ("1", "true", "yes"):
+        p = os.environ.get("BACKEND_PORT", "8004")
+        os.environ["BACKEND_URL"] = f"http://127.0.0.1:{p}"
+        return
+    os.environ["BACKEND_URL"] = _start_embedded_fastapi()
+
+
+_ensure_backend_url()
+
+
+def backend_base_url() -> str:
+    return os.environ.get("BACKEND_URL", "http://127.0.0.1:8004").rstrip("/")
 
 
 def api_get(path: str, params: dict[str, Any] | None = None) -> Any:
-    r = requests.get(f"{BACKEND_URL}{path}", params=params, timeout=10)
+    r = requests.get(f"{backend_base_url()}{path}", params=params, timeout=10)
     r.raise_for_status()
     return r.json()
 
 
 def api_post(path: str, json: dict[str, Any] | None = None) -> Any:
-    r = requests.post(f"{BACKEND_URL}{path}", json=json, timeout=15)
+    r = requests.post(f"{backend_base_url()}{path}", json=json, timeout=15)
     r.raise_for_status()
     return r.json()
-
-
-st.set_page_config(page_title="Battery Analytics — HC-05", page_icon="🔋", layout="wide")
 
 for key, default in [
     ("device_list", []),
@@ -44,7 +107,7 @@ for key, default in [
 
 with st.sidebar:
     st.header("HC-05 Connection")
-    st.caption(f"Backend → `{BACKEND_URL}`")
+    st.caption(f"Backend → `{backend_base_url()}`")
 
     with st.expander("Setup guide", expanded=False):
         st.markdown(
@@ -263,8 +326,10 @@ try:
     status = api_get("/status")
 except Exception as exc:
     st.error(
-        f"Backend not reachable at `{BACKEND_URL}`.\n\n"
-        f"Start it with: `uvicorn backend.api:app --port {BACKEND_PORT}`\n\n`{exc}`"
+        f"Backend not reachable at `{backend_base_url()}`.\n\n"
+        "**Local dev:** run `uvicorn backend.api:app --port 8004` in another terminal, or unset "
+        "`NO_EMBED_FASTAPI` so this app starts the API automatically.\n\n"
+        f"`{exc}`"
     )
     st.stop()
 
