@@ -27,7 +27,10 @@ export async function apiGet<T>(path: string, params?: Record<string, string | n
       if (v !== undefined && v !== "") u.searchParams.set(k, String(v));
     }
   }
-  const r = await fetch(u.toString());
+  const r = await fetch(u.toString(), {
+    cache: "no-store",
+    headers: { "Cache-Control": "no-cache", Pragma: "no-cache" },
+  });
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
   return r.json() as Promise<T>;
 }
@@ -37,7 +40,8 @@ export async function apiPost<T>(path: string, body: object): Promise<T> {
   const target = url.startsWith("http") ? url : new URL(url, window.location.origin).toString();
   const r = await fetch(target, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    cache: "no-store",
+    headers: { "Content-Type": "application/json", "Cache-Control": "no-cache" },
     body: JSON.stringify(body),
   });
   if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);

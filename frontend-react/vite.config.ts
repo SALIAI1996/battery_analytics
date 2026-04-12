@@ -3,6 +3,10 @@ import react from "@vitejs/plugin-react";
 
 export default defineConfig({
   plugins: [react()],
+  define: {
+    /** Changes every production build so you can confirm Vercel served a new bundle. */
+    __BUILD_TIME__: JSON.stringify(new Date().toISOString()),
+  },
   server: {
     port: 5173,
     proxy: {

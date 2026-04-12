@@ -320,6 +320,10 @@ export default function App() {
           <code className="mono">https://battery-analytics.onrender.com</code>), no <code className="mono">/api</code>{" "}
           suffix.
         </p>
+        <p className="header__hint header__hint--meta">
+          UI bundle: <span className="mono">{__BUILD_TIME__}</span> — if this does not change after a deploy, hard-refresh
+          (Shift+Reload) or clear site data; API calls use no-cache fetch.
+        </p>
       </header>
 
       <div className="layout">

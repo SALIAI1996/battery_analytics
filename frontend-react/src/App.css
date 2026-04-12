@@ -44,6 +44,12 @@
   opacity: 0.9;
 }
 
+.header__hint--meta {
+  margin-top: 0.35rem;
+  font-size: 0.72rem;
+  opacity: 0.75;
+}
+
 .header__links {
   display: flex;
   gap: 0.5rem;

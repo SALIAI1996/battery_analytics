@@ -11,7 +11,7 @@ from dotenv import load_dotenv
 # Load repo-root .env before any os.environ reads
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 
 log = logging.getLogger(__name__)
 from fastapi.middleware.cors import CORSMiddleware
@@ -65,6 +65,16 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def no_store_dynamic_api(request: Request, call_next):
+    """Avoid stale /status and /metrics in browser or intermediary caches."""
+    response = await call_next(request)
+    path = request.url.path
+    if path in ("/status", "/metrics/latest") or path.startswith("/thingspeak/"):
+        response.headers["Cache-Control"] = "no-store, max-age=0"
+    return response
 
 
 @app.get("/")
