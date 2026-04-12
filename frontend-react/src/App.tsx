@@ -74,6 +74,10 @@ export default function App() {
   }, [status?.active_device_id, status?.streaming, lastTs]);
 
   useEffect(() => {
+    document.title = "Battery Analytics";
+  }, []);
+
+  useEffect(() => {
     refreshStatus();
     const id = window.setInterval(refreshStatus, 5000);
     return () => window.clearInterval(id);
