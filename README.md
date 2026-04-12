@@ -15,6 +15,8 @@ Works on **macOS, Windows, and Linux**; production UI is typically **Vercel** + 
 
 **If Vercel is wired only via CLI / SDK (no GitHub integration):** pushes to GitHub **do not** update the live site. You must **deploy again** after pulling `main`—for example `cd frontend-react && npm run deploy:prod`, or your automation that calls the [Vercel API](https://vercel.com/docs/rest-api) / [`@vercel/sdk`](https://vercel.com/docs/sdk) (e.g. create a deployment for the linked project). To get automatic deploys from `main`, connect the GitHub repo under **Project → Settings → Git** in Vercel (optional).
 
+**Deploy Hook (GitHub → Vercel):** In Vercel, **Project → Settings → Git → Deploy Hooks**, create a hook for the `main` branch. You get a URL like `https://api.vercel.com/v1/integrations/deploy/...` — **keep it secret** (do not commit it). In GitHub: **Repository → Settings → Secrets and variables → Actions**, add **`VERCEL_DEPLOY_HOOK_URL`** with that full URL. Pushes to `main` then run the workflow in **`.github/workflows/vercel-deploy-hook.yml`**, which `POST`s the hook so Vercel builds the linked project.
+
 If Vercel keeps serving an **old UI** or builds look wrong: open **Project → Settings → General** and set **Root Directory** to **`frontend-react`**, save, then **Deployments → Redeploy** the latest commit on **`main`**. If you intentionally leave Root Directory empty (repo root), this repo now includes a **root `vercel.json`** that builds `frontend-react/` so the Vite app is what gets deployed.
 
 After deploy, open the Vercel URL and use **Connect ThingSpeak** in the React UI.
