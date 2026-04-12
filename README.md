@@ -13,6 +13,8 @@ Works on **macOS, Windows, and Linux**; production UI is typically **Vercel** + 
 | **Backend** | [Render](https://render.com) | Web service: `uvicorn backend.api:app --host 0.0.0.0 --port $PORT`. Use `render.yaml` (Blueprint) or create manually. Set `CORS_ORIGINS` to your Vercel URL(s), e.g. `https://your-app.vercel.app`. Optional: `THINGSPEAK_READ_API_KEY`. |
 | **Frontend** | [Vercel](https://vercel.com) | **Root directory:** `frontend-react`. Framework: Vite. Set **`VITE_API_URL`** to your Render API base (no trailing slash), e.g. `https://environmental-analytics-api.onrender.com`. |
 
+If Vercel keeps serving an **old UI** or builds look wrong: open **Project → Settings → General** and set **Root Directory** to **`frontend-react`**, save, then **Deployments → Redeploy** the latest commit on **`main`**. If you intentionally leave Root Directory empty (repo root), this repo now includes a **root `vercel.json`** that builds `frontend-react/` so the Vite app is what gets deployed.
+
 After deploy, open the Vercel URL and use **Connect ThingSpeak** in the React UI.
 
 **Local full-stack dev:** Terminal 1: `uvicorn backend.api:app --reload --port 8004`. Terminal 2: `cd frontend-react && npm install && npm run dev` — Vite proxies `/api/*` to `http://127.0.0.1:8004`, so leave `VITE_API_URL` unset. API docs: `http://127.0.0.1:8004/docs`.
