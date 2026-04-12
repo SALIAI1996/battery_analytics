@@ -8,7 +8,9 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview",
     "deploy": "npx --yes vercel@latest",
-    "deploy:prod": "npx --yes vercel@latest --prod"
+    "deploy:prod": "npx --yes vercel@latest --prod",
+    "deploy:prod:debug": "VERCEL_DEBUG=1 npx --yes vercel@latest --prod",
+    "deploy:prod:prebuilt": "npx --yes vercel@latest build && npx --yes vercel@latest deploy --prebuilt --prod"
   },
   "dependencies": {
     "react": "^18.3.1",
