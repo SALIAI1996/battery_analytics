@@ -93,8 +93,11 @@ Sensors / MCU ──▶ ThingSpeak ── HTTPS JSON API ──▶ FastAPI polle
 
 ### ThingSpeak setup
 
-1. In the React app, enter your **Channel ID** and **Read API key** (or set `THINGSPEAK_READ_API_KEY` on the server and leave the key blank in the UI).
-2. Click **Connect ThingSpeak**. The backend loads recent history (`initial_results`) and polls the [Channel Feed API](https://www.mathworks.com/help/thingspeak/readdata.html) on a fixed interval.
+Default channel in the app is **3337776** (override with **Channel ID** in the UI or `THINGSPEAK_CHANNEL_ID` on the server).
+
+1. Set **`THINGSPEAK_READ_API_KEY`** in the API server `.env` / Render (your **read** key from ThingSpeak). Do **not** commit keys to git.
+2. In the React app, enter **Channel ID** (defaults to 3337776) and **Read API key** *or* rely on the server key only (leave key blank if the server has `THINGSPEAK_READ_API_KEY`).
+3. Click **Connect ThingSpeak**. The backend loads history and polls the [Channel Feed API](https://www.mathworks.com/help/thingspeak/readdata.html).
 
 **Default field mapping** (ThingSpeak fields 1–5):
 
@@ -106,12 +109,21 @@ Sensors / MCU ──▶ ThingSpeak ── HTTPS JSON API ──▶ FastAPI polle
 | 4    | pH               |
 | 5    | Water quality (optional index) |
 
-**API examples** (replace keys with your own):
+**Direct ThingSpeak URLs** (for reference — keys stay private):
 
-- `GET https://api.thingspeak.com/channels/<ID>/feeds.json?api_key=<READ_KEY>&results=2`
-- `GET https://api.thingspeak.com/channels/<ID>/fields/1.json?api_key=<READ_KEY>&results=2`
+- Feeds: `GET https://api.thingspeak.com/channels/<ID>/feeds.json?api_key=<READ_KEY>&results=2`
+- Field 1: `GET https://api.thingspeak.com/channels/<ID>/fields/1.json?api_key=<READ_KEY>&results=2`
+- Channel status: `GET https://api.thingspeak.com/channels/<ID>/status.json?api_key=<READ_KEY>`
 
-Backend route: `POST /connect-thingspeak` with JSON `channel_id`, `read_api_key`, `poll_interval_sec`, `initial_results`.
+**Proxied through this backend** (uses `THINGSPEAK_READ_API_KEY` + optional `THINGSPEAK_CHANNEL_ID` from the server — no key in the browser):
+
+| Route | Maps to |
+|--------|---------|
+| `GET /thingspeak/channel-status` | `status.json` — channel name, etc. |
+| `GET /thingspeak/feeds?results=100` | `feeds.json` |
+| `GET /thingspeak/fields/1/data?results=100` | `fields/1.json` (use field `1`–`8`) |
+
+Streaming metrics for the dashboard: `POST /connect-thingspeak` with JSON `channel_id`, `read_api_key` (optional if env key set), `poll_interval_sec`, `initial_results`.
 
 ### What you get
 - **ThingSpeak integration** — poll channel feeds; React charts and summary insights

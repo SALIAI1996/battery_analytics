@@ -3,6 +3,7 @@ UART line parser for battery data from microcontrollers (PIC, Arduino, etc.) ove
 
 Handles multiple data formats:
   - Multi-cell: "V1:3.65,V2:3.64,V3:3.66,V4:3.63,I:2.1,T:28.5"
+  - With units: "V1=3.7,V2=3.6,V3=3.8,V4=3.5,I=1.2A,T=30C,SOC=75%"
   - CSV cells:  "3.65,3.64,3.66,3.63"  (all numbers → cell voltages)
   - JSON:       {"V1":3.65,"V2":3.64,"current":2.1,"temp":28.5}
   - Simple CSV: "12.6,2.1,28.5"  (V, I, T)
@@ -190,7 +191,7 @@ def _parse_json(line: str) -> ParsedBattery | None:
 
 
 def _parse_kv(line: str) -> ParsedBattery | None:
-    """Parse 'V1:3.65,V2:3.64,...,I:2.1,T:28.5,SOC:87' style lines."""
+    """Parse 'V1:3.65,...,I:2.1,T:28.5' or 'V1=3.7,...,I=1.2A,T=30C,SOC=75%' style lines."""
     # Split on comma or semicolon
     tokens = re.split(r"[,;]+", line)
     cells: dict[str, float] = {}
@@ -201,7 +202,12 @@ def _parse_kv(line: str) -> ParsedBattery | None:
 
     for tok in tokens:
         tok = tok.strip()
-        m = re.match(r"([A-Za-z_]\w*)\s*[:=]\s*([-+]?\d*\.?\d+)", tok)
+        # Value may be followed by optional unit: 1.2A, 30C, 75%, 3.7V
+        m = re.match(
+            r"^([A-Za-z_][\w-]*)\s*[:=]\s*([-+]?\d*\.?\d+)\s*([A-Za-z%°µΩ]*)?\s*$",
+            tok,
+            re.IGNORECASE,
+        )
         if not m:
             continue
         key = m.group(1).strip()

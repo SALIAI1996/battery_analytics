@@ -28,6 +28,9 @@ import "./App.css";
 const MAX_POINTS = 4000;
 const SPARK_POINTS = 80;
 
+/** Distinct stroke colors for per-cell voltage lines (cycles if more cells). */
+const CELL_LINE_COLORS = ["#22d3ee", "#a78bfa", "#fbbf24", "#fb7185", "#4ade80", "#f472b6"];
+
 function fmt(v: number | null | undefined, nd = 2): string {
   if (v === null || v === undefined) return "—";
   if (Number.isNaN(v)) return "—";
@@ -50,10 +53,11 @@ export default function App() {
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [channelId, setChannelId] = useState(3269475);
+  const [channelId, setChannelId] = useState(3337776);
   const [readKey, setReadKey] = useState("");
   const [pollSec, setPollSec] = useState(15);
   const [initialN, setInitialN] = useState(500);
+  const [tsChannelMeta, setTsChannelMeta] = useState<{ name?: string } | null>(null);
 
   const baseConfigured = useMemo(() => {
     const b = apiBase();
@@ -102,6 +106,26 @@ export default function App() {
     return () => window.clearInterval(id);
   }, [pullLatest]);
 
+  /** ThingSpeak channel status (name, etc.) — requires THINGSPEAK_READ_API_KEY on the API server. */
+  useEffect(() => {
+    if (!apiBase()) return;
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const d = await apiGet<{ channel?: { name?: string } }>("/thingspeak/channel-status");
+        if (!cancelled) setTsChannelMeta(d.channel ?? null);
+      } catch {
+        if (!cancelled) setTsChannelMeta(null);
+      }
+    };
+    load();
+    const t = window.setInterval(load, 60_000);
+    return () => {
+      cancelled = true;
+      window.clearInterval(t);
+    };
+  }, []);
+
   const connectThingSpeak = async () => {
     setLoading(true);
     setErr(null);
@@ -140,10 +164,34 @@ export default function App() {
   const last = points.length ? points[points.length - 1] : null;
   const isTs = last?.source === "thingspeak";
 
+  const hasBatteryPack = useMemo(
+    () => points.some((p) => p.cell_voltages && Object.keys(p.cell_voltages).length > 0),
+    [points]
+  );
+
+  const cellKeys = useMemo(() => {
+    const s = new Set<string>();
+    for (const p of points) {
+      if (p.cell_voltages) Object.keys(p.cell_voltages).forEach((k) => s.add(k));
+    }
+    return Array.from(s).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  }, [points]);
+
+  const hasEnvMetrics = useMemo(
+    () =>
+      anySeries(points, "humidity_pct") ||
+      anySeries(points, "tds_ppm") ||
+      anySeries(points, "ph") ||
+      anySeries(points, "water_quality_index"),
+    [points]
+  );
+
+  const showEnvGlance = !hasBatteryPack || hasEnvMetrics;
+
   const chartData = useMemo(() => {
     return points.map((p, idx) => {
       const d = new Date(p.ts);
-      return {
+      const row: Record<string, string | number | undefined> = {
         idx,
         t: p.ts,
         timeShort: d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
@@ -153,23 +201,49 @@ export default function App() {
         tds_ppm: p.tds_ppm ?? undefined,
         ph: p.ph ?? undefined,
         water_quality_index: p.water_quality_index ?? undefined,
+        voltage_v: p.voltage_v,
+        current_a: p.current_a,
+        soc_pct: p.soc_pct ?? undefined,
       };
+      for (const k of cellKeys) {
+        row[`cell_${k}`] = p.cell_voltages?.[k] ?? undefined;
+      }
+      return row;
     });
-  }, [points]);
+  }, [points, cellKeys]);
 
   const tempSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.temperature_c)), [points]);
   const humSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.humidity_pct)), [points]);
   const tdsSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.tds_ppm)), [points]);
   const phSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.ph)), [points]);
   const wqSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.water_quality_index)), [points]);
+  const packVSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.voltage_v)), [points]);
+  const currSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.current_a)), [points]);
+  const socSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.soc_pct)), [points]);
 
   const insights = useMemo(() => {
     if (!isTs || !points.length) return null;
+    const lines: string[] = [];
+    if (hasBatteryPack) {
+      const volts = numericSeries(points, (p) => p.voltage_v);
+      if (volts.length) {
+        lines.push(
+          `Pack voltage range in view: ${Math.min(...volts).toFixed(2)} – ${Math.max(...volts).toFixed(2)} V`
+        );
+      }
+      const lastPt = points[points.length - 1]!;
+      if (lastPt.cell_voltages) {
+        const xs = Object.values(lastPt.cell_voltages);
+        if (xs.length > 1) {
+          const spread = Math.max(...xs) - Math.min(...xs);
+          lines.push(`Latest cell spread: ${spread.toFixed(3)} V`);
+        }
+      }
+    }
     const temps = numericSeries(points, (p) => p.temperature_c);
     const phs = numericSeries(points, (p) => p.ph);
     const tds = numericSeries(points, (p) => p.tds_ppm);
-    const lines: string[] = [];
-    if (temps.length) {
+    if (temps.length && (!hasBatteryPack || hasEnvMetrics)) {
       lines.push(
         `Temperature range in view: ${Math.min(...temps).toFixed(2)} – ${Math.max(...temps).toFixed(2)} °C`
       );
@@ -181,7 +255,7 @@ export default function App() {
       lines.push(`TDS range in view: ${Math.min(...tds).toFixed(0)} – ${Math.max(...tds).toFixed(0)} ppm`);
     }
     return lines.length ? lines : null;
-  }, [isTs, points]);
+  }, [isTs, points, hasBatteryPack, hasEnvMetrics]);
 
   const timeSpanLabel = useMemo(() => {
     if (points.length < 2) return null;
@@ -200,10 +274,18 @@ export default function App() {
       <header className="header">
         <div className="header__row">
           <div>
-            <h1>Environmental analytics</h1>
+            <h1>{hasBatteryPack ? "Battery analytics" : "Environmental analytics"}</h1>
             <p className="header__lede">
-              Live water &amp; environment telemetry from ThingSpeak — interactive charts, ranges, and at-a-glance
-              KPIs.
+              {hasBatteryPack ? (
+                <>
+                  Live BMS-style telemetry from ThingSpeak (per-cell V, pack I/T/SOC) — charts, ranges, and KPIs.
+                </>
+              ) : (
+                <>
+                  Live water &amp; environment telemetry from ThingSpeak — interactive charts, ranges, and at-a-glance
+                  KPIs.
+                </>
+              )}
             </p>
           </div>
           <div className="header__links">
@@ -293,6 +375,12 @@ export default function App() {
           {err && <p className="error">{err}</p>}
 
           <div className="panel__help">
+            <strong>Channel 3337776</strong>
+            <p className="panel__help-p">
+              Set the same read key on the API server as <span className="mono">THINGSPEAK_READ_API_KEY</span> (e.g.
+              Render env) so <span className="mono">/thingspeak/channel-status</span> can show the channel name and
+              proxy feeds/field APIs without exposing the key in the browser.
+            </p>
             <strong>Reading the dashboard</strong>
             <ul>
               <li>
@@ -325,6 +413,12 @@ export default function App() {
               <span className="status-pill__k">Device</span>
               <span className="status-pill__v mono">{status?.active_device_id ?? "—"}</span>
             </div>
+            {tsChannelMeta?.name && (
+              <div className="status-pill status-pill--grow">
+                <span className="status-pill__k">ThingSpeak</span>
+                <span className="status-pill__v">{tsChannelMeta.name}</span>
+              </div>
+            )}
             {points.length > 0 && (
               <div className="status-pill">
                 <span className="status-pill__k">Samples</span>
@@ -351,10 +445,180 @@ export default function App() {
 
           {last && isTs && (
             <>
+              {hasBatteryPack && (
+                <>
+                  <section className="section">
+                    <h2 className="section__title">Battery pack</h2>
+                    <p className="section__sub">
+                      Parsed from ThingSpeak fields containing BMS text (e.g.{" "}
+                      <code className="mono">V1=3.7,…,I=1.2A,T=30C,SOC=75%</code>). Use the brush on charts to narrow
+                      time.
+                    </p>
+                    <div className="kpi-grid">
+                      <KpiCard
+                        title="Pack voltage"
+                        unit="V"
+                        value={fmt(last.voltage_v)}
+                        sparkline={spark(numericSeries(points, (p) => p.voltage_v))}
+                        min={packVSt?.min}
+                        max={packVSt?.max}
+                        deltaLabel={
+                          packVSt && packVSt.delta !== 0
+                            ? formatDelta(packVSt.delta, "V") + " window"
+                            : undefined
+                        }
+                        footnote="Sum of cell voltages when cells are present"
+                      />
+                      <KpiCard
+                        title="Current"
+                        unit="A"
+                        value={fmt(last.current_a)}
+                        sparkline={spark(numericSeries(points, (p) => p.current_a))}
+                        min={currSt?.min}
+                        max={currSt?.max}
+                        deltaLabel={
+                          currSt && currSt.delta !== 0
+                            ? formatDelta(currSt.delta, "A") + " window"
+                            : undefined
+                        }
+                      />
+                      <KpiCard
+                        title="BMS temperature"
+                        unit="°C"
+                        value={fmt(last.temperature_c)}
+                        sparkline={spark(numericSeries(points, (p) => p.temperature_c))}
+                        min={tempSt?.min}
+                        max={tempSt?.max}
+                        deltaLabel={
+                          tempSt && tempSt.delta !== 0
+                            ? formatDelta(tempSt.delta, "°C") + " window"
+                            : undefined
+                        }
+                      />
+                      <KpiCard
+                        title="State of charge"
+                        unit="%"
+                        value={last.soc_pct != null ? fmt(last.soc_pct, 0) : "—"}
+                        sparkline={spark(numericSeries(points, (p) => p.soc_pct))}
+                        min={socSt?.min}
+                        max={socSt?.max}
+                        deltaLabel={
+                          socSt && socSt.delta !== 0 ? formatDelta(socSt.delta, "%", 0) + " window" : undefined
+                        }
+                      />
+                    </div>
+                    {cellKeys.length > 0 && (
+                      <div className="battery-cells" aria-label="Latest cell voltages">
+                        {cellKeys.map((k) => (
+                          <div key={k} className="battery-cell-pill">
+                            <span className="battery-cell-pill__k">{k}</span>
+                            <span className="battery-cell-pill__v">
+                              {fmt(last.cell_voltages?.[k], 2)} V
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </section>
+
+                  <section className="section">
+                    <h2 className="section__title">Pack &amp; cell voltages</h2>
+                    <p className="section__sub">Pack total and per-cell traces (volts).</p>
+                    <div className="chart-wrap chart-wrap--tall">
+                      <ResponsiveContainer width="100%" height={420}>
+                        <ComposedChart data={chartData} margin={{ top: 12, right: 12, left: 4, bottom: 4 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
+                          <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
+                          <YAxis
+                            tick={{ fill: "#8b9cb3", fontSize: 11 }}
+                            domain={["auto", "auto"]}
+                            label={{ value: "V", angle: -90, position: "insideLeft", fill: "#8b9cb3" }}
+                          />
+                          <Tooltip content={<ChartTooltip />} />
+                          <Legend />
+                          <Line
+                            type="monotone"
+                            dataKey="voltage_v"
+                            name="Pack V"
+                            stroke="#e8edf5"
+                            strokeWidth={2.5}
+                            dot={false}
+                            isAnimationActive={points.length < 500}
+                          />
+                          {cellKeys.map((k, i) => (
+                            <Line
+                              key={k}
+                              type="monotone"
+                              dataKey={`cell_${k}`}
+                              name={`${k}`}
+                              stroke={CELL_LINE_COLORS[i % CELL_LINE_COLORS.length]}
+                              strokeWidth={1.75}
+                              dot={false}
+                              isAnimationActive={points.length < 500}
+                            />
+                          ))}
+                          <Brush dataKey="idx" height={28} stroke="#22d3ee" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </section>
+
+                  <section className="section">
+                    <h2 className="section__title">Current &amp; state of charge</h2>
+                    <p className="section__sub">Amperes and SOC (%).</p>
+                    <div className="chart-wrap chart-wrap--tall">
+                      <ResponsiveContainer width="100%" height={360}>
+                        <ComposedChart data={chartData} margin={{ top: 12, right: 16, left: 4, bottom: 4 }}>
+                          <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
+                          <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
+                          <YAxis
+                            yAxisId="a"
+                            tick={{ fill: "#8b9cb3", fontSize: 11 }}
+                            label={{ value: "A", angle: -90, position: "insideLeft", fill: "#8b9cb3" }}
+                          />
+                          <YAxis
+                            yAxisId="b"
+                            orientation="right"
+                            domain={[0, 100]}
+                            tick={{ fill: "#8b9cb3", fontSize: 11 }}
+                            label={{ value: "% SOC", angle: 90, position: "insideRight", fill: "#8b9cb3" }}
+                          />
+                          <Tooltip content={<ChartTooltip />} />
+                          <Legend />
+                          <Line
+                            yAxisId="a"
+                            type="monotone"
+                            dataKey="current_a"
+                            name="Current A"
+                            stroke="#fbbf24"
+                            strokeWidth={2}
+                            dot={false}
+                            isAnimationActive={points.length < 500}
+                          />
+                          <Line
+                            yAxisId="b"
+                            type="monotone"
+                            dataKey="soc_pct"
+                            name="SOC %"
+                            stroke="#34d399"
+                            strokeWidth={2}
+                            dot={false}
+                            isAnimationActive={points.length < 500}
+                          />
+                          <Brush dataKey="idx" height={28} stroke="#fbbf24" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
+                        </ComposedChart>
+                      </ResponsiveContainer>
+                    </div>
+                  </section>
+                </>
+              )}
+
+              {showEnvGlance && (
               <section className="section">
                 <h2 className="section__title">At a glance</h2>
                 <p className="section__sub">Latest reading vs min–max in the chart window (use brush below to change the window).</p>
                 <div className="kpi-grid">
+                  {anySeries(points, "temperature_c") && !hasBatteryPack && (
                   <KpiCard
                     title="Temperature"
                     unit="°C"
@@ -369,6 +633,8 @@ export default function App() {
                     }
                     footnote="Typical comfort ~20–26 °C (context-dependent)"
                   />
+                  )}
+                  {anySeries(points, "humidity_pct") && (
                   <KpiCard
                     title="Humidity"
                     unit="%"
@@ -380,6 +646,8 @@ export default function App() {
                       humSt && humSt.delta !== 0 ? formatDelta(humSt.delta, "%") + " window" : undefined
                     }
                   />
+                  )}
+                  {anySeries(points, "tds_ppm") && (
                   <KpiCard
                     title="TDS"
                     unit="ppm"
@@ -392,6 +660,8 @@ export default function App() {
                     }
                     footnote="Total dissolved solids — calibrate to your application"
                   />
+                  )}
+                  {anySeries(points, "ph") && (
                   <KpiCard
                     title="pH"
                     unit=""
@@ -406,6 +676,8 @@ export default function App() {
                     }
                     footnote="Band 6.5–8.5 shown on chart as reference"
                   />
+                  )}
+                  {anySeries(points, "water_quality_index") && (
                   <KpiCard
                     title="Water quality"
                     unit="idx"
@@ -415,8 +687,10 @@ export default function App() {
                     max={wqSt?.max}
                     footnote="Field 5 on ThingSpeak (if configured)"
                   />
+                  )}
                 </div>
               </section>
+              )}
 
               {(anySeries(points, "temperature_c") || anySeries(points, "humidity_pct")) && (
                 <section className="section">

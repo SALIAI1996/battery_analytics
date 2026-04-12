@@ -117,6 +117,13 @@
   line-height: 1.5;
 }
 
+.panel__help-p {
+  margin: 0 0 0.75rem;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
 .panel__help strong {
   color: var(--text);
   display: block;
@@ -519,6 +526,35 @@
   position: absolute;
   left: 0;
   color: var(--accent);
+}
+
+.battery-cells {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 1rem;
+}
+
+.battery-cell-pill {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.35rem 0.65rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(34, 211, 238, 0.08);
+  font-size: 0.85rem;
+}
+
+.battery-cell-pill__k {
+  font-weight: 700;
+  color: var(--accent);
+  letter-spacing: 0.02em;
+}
+
+.battery-cell-pill__v {
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
 }
 
 .error {

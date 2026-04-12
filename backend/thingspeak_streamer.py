@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
 from datetime import datetime, timezone
@@ -9,6 +10,7 @@ from typing import Callable, Optional
 import requests
 
 from .models import BatteryMetric
+from .sc05_uart import parse_sc05_line
 
 log = logging.getLogger(__name__)
 
@@ -32,10 +34,50 @@ def _field_float(feed: dict, key: str) -> Optional[float]:
         return None
 
 
+def _looks_like_bms_line(s: str) -> bool:
+    """Detect BMS-style telemetry (e.g. V1=3.7,...,I=1.2A,T=30C,SOC=75%) in a ThingSpeak field."""
+    return bool(re.search(r"\bV1\s*=", s, re.I) or re.search(r"\bV1\s*:", s, re.I))
+
+
 def feed_to_metric(feed: dict, device_id: str) -> BatteryMetric:
-    """Map ThingSpeak fields to telemetry. Default: 1=temp, 2=humidity, 3=TDS, 4=pH, 5=water quality index."""
+    """Map ThingSpeak fields to telemetry.
+
+    If any field contains BMS-style key=value telemetry (V1=…), parse it and fill battery metrics.
+    Otherwise default mapping: 1=temp, 2=humidity, 3=TDS, 4=pH, 5=water quality index.
+    """
     eid = feed.get("entry_id")
-    raw = f"ThingSpeak entry_id={eid}" if eid is not None else "ThingSpeak"
+    raw_default = f"ThingSpeak entry_id={eid}" if eid is not None else "ThingSpeak"
+
+    for i in range(1, 9):
+        key = f"field{i}"
+        raw = feed.get(key)
+        if raw is None or raw == "":
+            continue
+        s = str(raw).strip()
+        if not _looks_like_bms_line(s):
+            continue
+        parsed = parse_sc05_line(s)
+        if parsed is None:
+            continue
+        if not parsed.cell_voltages and parsed.voltage_v <= 0 and parsed.current_a == 0:
+            continue
+        raw_line = s[:500] if len(s) > 500 else s
+        return BatteryMetric(
+            ts=_parse_ts(feed["created_at"]),
+            device_id=device_id,
+            voltage_v=parsed.voltage_v,
+            current_a=parsed.current_a,
+            temperature_c=parsed.temperature_c,
+            soc_pct=parsed.soc_pct,
+            cell_voltages=parsed.cell_voltages,
+            humidity_pct=None,
+            tds_ppm=None,
+            ph=None,
+            water_quality_index=None,
+            raw_line=raw_line,
+            source="thingspeak",
+        )
+
     return BatteryMetric(
         ts=_parse_ts(feed["created_at"]),
         device_id=device_id,
@@ -48,7 +90,7 @@ def feed_to_metric(feed: dict, device_id: str) -> BatteryMetric:
         tds_ppm=_field_float(feed, "field3"),
         ph=_field_float(feed, "field4"),
         water_quality_index=_field_float(feed, "field5"),
-        raw_line=raw,
+        raw_line=raw_default,
         source="thingspeak",
     )
 

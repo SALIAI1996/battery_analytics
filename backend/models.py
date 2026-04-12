@@ -62,7 +62,7 @@ class StatusResponse(BaseModel):
 
 
 class ThingSpeakConnectRequest(BaseModel):
-    channel_id: int = Field(default=3269475, description="ThingSpeak channel ID")
+    channel_id: int = Field(default=3337776, description="ThingSpeak channel ID")
     read_api_key: str = Field(
         default="",
         description="Read API key; if empty, uses env THINGSPEAK_READ_API_KEY",

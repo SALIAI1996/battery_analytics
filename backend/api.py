@@ -23,8 +23,31 @@ from .models import (
     TerminalSendRequest, ThingSpeakConnectRequest,
 )
 from .state import STATE
+from .thingspeak_api import (
+    fetch_channel_status_json,
+    fetch_feeds_json,
+    fetch_field_json,
+)
 
-app = FastAPI(title="Environmental Analytics Backend", version="0.3.0")
+app = FastAPI(title="Environmental Analytics Backend", version="0.4.0")
+
+
+def _default_thingspeak_channel_id() -> int:
+    raw = (os.environ.get("THINGSPEAK_CHANNEL_ID") or "").strip()
+    if raw.isdigit():
+        return int(raw)
+    return 3337776
+
+
+def _thingspeak_read_key_required() -> str:
+    """Read key from server env only (never passed from browser in these proxy routes)."""
+    key = (os.environ.get("THINGSPEAK_READ_API_KEY") or "").strip()
+    if not key:
+        raise HTTPException(
+            status_code=503,
+            detail="Set THINGSPEAK_READ_API_KEY in the server environment to use ThingSpeak proxy endpoints.",
+        )
+    return key
 
 
 def _cors_origins() -> list[str]:
@@ -52,6 +75,11 @@ def root() -> dict:
         "docs": "/docs",
         "health": "/health",
         "hint": "The React app calls /status, /connect-thingspeak, etc. — not GET /",
+        "thingspeak": {
+            "channel_status": "/thingspeak/channel-status",
+            "feeds": "/thingspeak/feeds",
+            "field": "/thingspeak/fields/{1-8}/data",
+        },
     }
 
 
@@ -95,6 +123,56 @@ def devices(include_sim: bool = True) -> list[DiscoveredDevice]:
         )
 
     return found
+
+
+@app.get("/thingspeak/channel-status")
+def thingspeak_channel_status(
+    channel_id: int | None = Query(default=None, description="Defaults to THINGSPEAK_CHANNEL_ID or 3337776"),
+) -> dict:
+    """
+    Proxies ThingSpeak `channels/{id}/status.json` using THINGSPEAK_READ_API_KEY from the server.
+    See: https://www.mathworks.com/help/thingspeak/channelstatus.html
+    """
+    cid = channel_id if channel_id is not None else _default_thingspeak_channel_id()
+    key = _thingspeak_read_key_required()
+    try:
+        return fetch_channel_status_json(cid, key)
+    except Exception as e:
+        log.warning("ThingSpeak status fetch failed: %s", e)
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/thingspeak/feeds")
+def thingspeak_feeds(
+    channel_id: int | None = Query(default=None),
+    results: int = Query(default=100, ge=1, le=8000),
+) -> dict:
+    """Proxies `feeds.json` — raw feed payload for inspection or custom clients."""
+    cid = channel_id if channel_id is not None else _default_thingspeak_channel_id()
+    key = _thingspeak_read_key_required()
+    try:
+        return fetch_feeds_json(cid, key, results=results)
+    except Exception as e:
+        log.warning("ThingSpeak feeds fetch failed: %s", e)
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@app.get("/thingspeak/fields/{field_num}/data")
+def thingspeak_field_data(
+    field_num: int,
+    channel_id: int | None = Query(default=None),
+    results: int = Query(default=100, ge=1, le=8000),
+) -> dict:
+    """Proxies `fields/{n}.json` for a single field time series."""
+    if field_num < 1 or field_num > 8:
+        raise HTTPException(status_code=422, detail="field_num must be between 1 and 8")
+    cid = channel_id if channel_id is not None else _default_thingspeak_channel_id()
+    key = _thingspeak_read_key_required()
+    try:
+        return fetch_field_json(cid, field_num, key, results=results)
+    except Exception as e:
+        log.warning("ThingSpeak field fetch failed: %s", e)
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 def _resolve_thingspeak_key(req: ThingSpeakConnectRequest) -> str:
