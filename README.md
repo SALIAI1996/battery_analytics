@@ -9,9 +9,11 @@ Works on **macOS, Windows, and Linux**; production UI is typically **Vercel** + 
 
 | Piece | Where | Notes |
 |--------|--------|--------|
-| **Code** | GitHub | Push this repo; connect both hosts to the same repo. |
+| **Code** | GitHub | Source of truth; push here for history and collaboration. |
 | **Backend** | [Render](https://render.com) | Web service: `uvicorn backend.api:app --host 0.0.0.0 --port $PORT`. Use `render.yaml` (Blueprint) or create manually. Set `CORS_ORIGINS` to your Vercel URL(s), e.g. `https://your-app.vercel.app`. Optional: `THINGSPEAK_READ_API_KEY`. |
-| **Frontend** | [Vercel](https://vercel.com) | **Root directory:** `frontend-react`. Framework: Vite. Set **`VITE_API_URL`** to your Render API base (no trailing slash), e.g. `https://environmental-analytics-api.onrender.com`. |
+| **Frontend** | [Vercel](https://vercel.com) | **Root directory:** `frontend-react` (or repo root + root `vercel.json`). Framework: Vite. Set **`VITE_API_URL`** to your Render API base (no trailing slash), e.g. `https://environmental-analytics-api.onrender.com`. |
+
+**If Vercel is wired only via CLI / SDK (no GitHub integration):** pushes to GitHub **do not** update the live site. You must **deploy again** after pulling `main`—for example `cd frontend-react && npm run deploy:prod`, or your automation that calls the [Vercel API](https://vercel.com/docs/rest-api) / [`@vercel/sdk`](https://vercel.com/docs/sdk) (e.g. create a deployment for the linked project). To get automatic deploys from `main`, connect the GitHub repo under **Project → Settings → Git** in Vercel (optional).
 
 If Vercel keeps serving an **old UI** or builds look wrong: open **Project → Settings → General** and set **Root Directory** to **`frontend-react`**, save, then **Deployments → Redeploy** the latest commit on **`main`**. If you intentionally leave Root Directory empty (repo root), this repo now includes a **root `vercel.json`** that builds `frontend-react/` so the Vite app is what gets deployed.
 
