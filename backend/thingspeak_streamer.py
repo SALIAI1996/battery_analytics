@@ -120,6 +120,21 @@ class ThingSpeakStreamer:
         self._last_entry_id: int = 0
         self._lock = threading.Lock()
 
+        self._last_error: Optional[str] = None
+        self._last_feed_count: int = 0
+        self._polls_succeeded: int = 0
+        self._polls_failed: int = 0
+
+    def diagnostics(self) -> dict:
+        """Expose to GET /status so the UI can explain empty charts."""
+        with self._lock:
+            return {
+                "last_error": self._last_error,
+                "last_feed_count": self._last_feed_count,
+                "polls_succeeded": self._polls_succeeded,
+                "polls_failed": self._polls_failed,
+            }
+
     @property
     def running(self) -> bool:
         return self._running.is_set()
@@ -136,14 +151,30 @@ class ThingSpeakStreamer:
         self._running.clear()
 
     def _fetch_feeds(self, results: int) -> list[dict]:
+        """GET feeds.json; raises on HTTP errors, JSON errors, or ThingSpeak `error` payloads."""
         url = THINGSPEAK_FEEDS_URL.format(channel_id=self.channel_id)
         r = requests.get(
             url,
             params={"api_key": self.api_key, "results": results},
             timeout=30,
         )
-        r.raise_for_status()
-        data = r.json()
+        try:
+            r.raise_for_status()
+        except requests.HTTPError as e:
+            snippet = (e.response.text if e.response is not None else "")[:240].replace("\n", " ")
+            code = e.response.status_code if e.response is not None else "?"
+            raise RuntimeError(
+                f"ThingSpeak HTTP {code} for channel {self.channel_id}: {snippet!r}"
+            ) from e
+        try:
+            data = r.json()
+        except ValueError as e:
+            snippet = (r.text or "")[:240].replace("\n", " ")
+            raise RuntimeError(f"ThingSpeak response is not JSON ({snippet!r})") from e
+        if isinstance(data, dict) and data.get("error"):
+            raise RuntimeError(str(data["error"]))
+        if not isinstance(data, dict):
+            raise RuntimeError(f"Unexpected ThingSpeak JSON payload: {data!r}")
         feeds = data.get("feeds") or []
         return feeds if isinstance(feeds, list) else []
 
@@ -183,18 +214,36 @@ class ThingSpeakStreamer:
                 if eid_int > self._last_entry_id:
                     self._last_entry_id = eid_int
 
+    def _record_poll_ok(self, feeds: list[dict]) -> None:
+        with self._lock:
+            self._last_error = None
+            self._last_feed_count = len(feeds)
+            self._polls_succeeded += 1
+
+    def _record_poll_err(self, exc: BaseException) -> None:
+        msg = str(exc).strip() or repr(exc)
+        if len(msg) > 500:
+            msg = msg[:497] + "…"
+        with self._lock:
+            self._last_error = msg
+            self._polls_failed += 1
+        log.warning("ThingSpeak poll failed: %s", exc)
+
     def _run(self, on_metric: Callable[[BatteryMetric], None]) -> None:
         self._running.set()
         try:
             feeds = self._fetch_feeds(self.initial_results)
+            self._record_poll_ok(feeds)
             self._emit_new(feeds, on_metric, initial=True)
         except Exception as e:
+            self._record_poll_err(e)
             log.warning("ThingSpeak initial fetch failed: %s", e)
 
         while not self._stop.is_set():
             try:
                 feeds = self._fetch_feeds(min(100, max(20, self.initial_results)))
+                self._record_poll_ok(feeds)
                 self._emit_new(feeds, on_metric, initial=False)
             except Exception as e:
-                log.warning("ThingSpeak poll failed: %s", e)
+                self._record_poll_err(e)
             self._stop.wait(self.poll_interval_sec)

@@ -240,6 +240,40 @@
   background: rgba(251, 191, 36, 0.08);
 }
 
+.banner--error {
+  border-color: rgba(248, 113, 113, 0.45);
+  background: rgba(248, 113, 113, 0.1);
+  color: #fecaca;
+}
+
+.banner--warn {
+  border-color: rgba(251, 191, 36, 0.45);
+  background: rgba(251, 191, 36, 0.1);
+  color: #fde68a;
+}
+
+.thingspeak-wait {
+  margin-bottom: 1rem;
+}
+
+.thingspeak-wait__list {
+  margin: 0.65rem 0 0;
+  padding-left: 1.2rem;
+  color: var(--muted);
+  font-size: 0.85rem;
+  line-height: 1.45;
+}
+
+.thingspeak-wait__list li {
+  margin-bottom: 0.35rem;
+}
+
+.wrap-break {
+  word-break: break-word;
+  display: inline-block;
+  max-width: 100%;
+}
+
 /* Status strip */
 .status-strip {
   display: flex;
@@ -279,6 +313,12 @@
   color: var(--text);
   font-weight: 600;
   font-variant-numeric: tabular-nums;
+}
+
+.status-pill__hint {
+  font-weight: 500;
+  color: var(--muted);
+  font-size: 0.72rem;
 }
 
 .status-pill__v--on {

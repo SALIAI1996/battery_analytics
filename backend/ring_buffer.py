@@ -45,3 +45,7 @@ class MetricsRingBuffer:
         with self._lock:
             self._buf.clear()
 
+    def __len__(self) -> int:
+        with self._lock:
+            return len(self._buf)
+

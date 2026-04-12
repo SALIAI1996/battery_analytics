@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Area,
   Brush,
@@ -105,6 +105,18 @@ export default function App() {
     const id = window.setInterval(pullLatest, 1500);
     return () => window.clearInterval(id);
   }, [pullLatest]);
+
+  /** Pull once when a device becomes active (reconnect resets ref via active_device_id going null). */
+  const bootstrapPullFor = useRef<string | null>(null);
+  useEffect(() => {
+    if (!status?.streaming || !status?.active_device_id) {
+      bootstrapPullFor.current = null;
+      return;
+    }
+    if (bootstrapPullFor.current === status.active_device_id) return;
+    bootstrapPullFor.current = status.active_device_id;
+    void pullLatest();
+  }, [status?.streaming, status?.active_device_id, pullLatest]);
 
   /** ThingSpeak channel status (name, etc.) — requires THINGSPEAK_READ_API_KEY on the API server. */
   useEffect(() => {
@@ -375,11 +387,12 @@ export default function App() {
           {err && <p className="error">{err}</p>}
 
           <div className="panel__help">
-            <strong>Channel 3337776</strong>
+            <strong>ThingSpeak read key</strong>
             <p className="panel__help-p">
-              Set the same read key on the API server as <span className="mono">THINGSPEAK_READ_API_KEY</span> (e.g.
-              Render env) so <span className="mono">/thingspeak/channel-status</span> can show the channel name and
-              proxy feeds/field APIs without exposing the key in the browser.
+              The <strong>Read API key must belong to the channel ID</strong> you enter above. If the key is for a
+              different channel, the API cannot load feeds and charts stay empty. Set the same key on the server as{" "}
+              <span className="mono">THINGSPEAK_READ_API_KEY</span> (e.g. Render) or paste it here when connecting so{" "}
+              <span className="mono">/thingspeak/channel-status</span> and polling work.
             </p>
             <strong>Reading the dashboard</strong>
             <ul>
@@ -419,10 +432,15 @@ export default function App() {
                 <span className="status-pill__v">{tsChannelMeta.name}</span>
               </div>
             )}
-            {points.length > 0 && (
+            {(points.length > 0 || (status?.metrics_buffer_len ?? 0) > 0) && (
               <div className="status-pill">
                 <span className="status-pill__k">Samples</span>
-                <span className="status-pill__v">{points.length}</span>
+                <span className="status-pill__v">
+                  {points.length}
+                  {status?.mode === "thingspeak" && status.metrics_buffer_len != null && (
+                    <span className="status-pill__hint"> (API buffer {status.metrics_buffer_len})</span>
+                  )}
+                </span>
               </div>
             )}
             {timeSpanLabel && (
@@ -440,7 +458,46 @@ export default function App() {
           </div>
 
           {!points.length && status?.mode === "thingspeak" && status.streaming && (
-            <div className="banner banner--pulse">Waiting for first samples from ThingSpeak…</div>
+            <div className="thingspeak-wait">
+              {status.thingspeak?.last_error ? (
+                <div className="banner banner--error">
+                  <strong>ThingSpeak polling error.</strong> The backend could not read feeds for this channel.{" "}
+                  <span className="mono wrap-break">{status.thingspeak.last_error}</span>
+                  <ul className="thingspeak-wait__list">
+                    <li>
+                      Use the <strong>Read API key</strong> for <em>this</em> channel (not the write key). Paste it in
+                      the sidebar or set <span className="mono">THINGSPEAK_READ_API_KEY</span> on the API server for the
+                      same channel ID.
+                    </li>
+                    <li>
+                      Private channels return HTTP 400 if the key does not match — the buffer stays empty even while
+                      “Streaming” is on.
+                    </li>
+                  </ul>
+                </div>
+              ) : (status.metrics_buffer_len ?? 0) > 0 ? (
+                <div className="banner banner--warn">
+                  <strong>API has data but the browser has not synced yet.</strong> Try refreshing the page. If it
+                  persists, check the browser network tab for <span className="mono">/metrics/latest</span> (CORS /
+                  <span className="mono">VITE_API_URL</span>).
+                </div>
+              ) : (
+                <div className="banner banner--pulse">
+                  <strong>Waiting for ThingSpeak rows…</strong> The channel returned{" "}
+                  <strong>{status.thingspeak?.last_feed_count ?? 0}</strong> feed row(s) on the last successful poll.
+                  {status.thingspeak && status.thingspeak.polls_failed > 0 && (
+                    <> Poll failures: {status.thingspeak.polls_failed}.</>
+                  )}
+                  <ul className="thingspeak-wait__list">
+                    <li>If the count is 0, the channel has no entries yet — publish at least one update from your device.</li>
+                    <li>
+                      Confirm <span className="mono">VITE_API_URL</span> points at your Render API (scheme{" "}
+                      <span className="mono">https://</span>), not the Vercel UI URL.
+                    </li>
+                  </ul>
+                </div>
+              )}
+            </div>
           )}
 
           {last && isTs && (

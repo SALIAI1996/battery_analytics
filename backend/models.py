@@ -54,11 +54,22 @@ class ConnectResponse(BaseModel):
     message: str
 
 
+class ThingSpeakStatus(BaseModel):
+    """Populated when mode is thingspeak — explains empty charts if polling fails or channel has no rows."""
+
+    last_error: Optional[str] = None
+    last_feed_count: int = 0
+    polls_succeeded: int = 0
+    polls_failed: int = 0
+
+
 class StatusResponse(BaseModel):
     active_device_id: str | None
     connected: bool
     streaming: bool
     mode: Literal["serial", "sim", "none", "thingspeak"]
+    metrics_buffer_len: int = Field(default=0, description="Rows available via GET /metrics/latest")
+    thingspeak: Optional[ThingSpeakStatus] = None
 
 
 class ThingSpeakConnectRequest(BaseModel):

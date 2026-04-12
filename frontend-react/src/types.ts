@@ -1,8 +1,18 @@
+export interface ThingSpeakStatus {
+  last_error: string | null;
+  last_feed_count: number;
+  polls_succeeded: number;
+  polls_failed: number;
+}
+
 export interface StatusResponse {
   active_device_id: string | null;
   connected: boolean;
   streaming: boolean;
   mode: "serial" | "sim" | "none" | "thingspeak";
+  /** Rows the API has buffered for GET /metrics/latest */
+  metrics_buffer_len?: number;
+  thingspeak?: ThingSpeakStatus | null;
 }
 
 export interface BatteryMetric {

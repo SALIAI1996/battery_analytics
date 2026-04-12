@@ -94,12 +94,17 @@ class AppState:
             else:
                 connected = False
                 streaming = False
-            return {
+            out: dict = {
                 "active_device_id": self.active_device_id,
                 "connected": connected,
                 "streaming": streaming,
                 "mode": self.mode,
+                "metrics_buffer_len": len(self.buffer),
+                "thingspeak": None,
             }
+            if self.mode == "thingspeak" and self.thingspeak is not None:
+                out["thingspeak"] = self.thingspeak.diagnostics()
+            return out
 
     def latest_since(self, ts: Optional[datetime], limit: int = 500) -> list[BatteryMetric]:
         return self.buffer.since(ts=ts, limit=limit)
