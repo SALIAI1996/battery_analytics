@@ -608,3 +608,18 @@
   font-size: 0.85rem;
   margin-top: 0.5rem;
 }
+
+.chart-empty {
+  min-height: 280px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 10px;
+  border: 1px dashed var(--border);
+  background: rgba(15, 22, 32, 0.5);
+  color: var(--muted);
+  font-size: 0.9rem;
+  padding: 1.5rem;
+  text-align: center;
+  line-height: 1.5;
+}

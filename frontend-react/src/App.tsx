@@ -1,27 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  Area,
-  Brush,
-  CartesianGrid,
-  ComposedChart,
-  Legend,
-  Line,
-  ReferenceArea,
-  ReferenceLine,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
+import { Brush, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { ChartTooltip } from "./components/ChartTooltip";
 import { KpiCard } from "./components/KpiCard";
 import { apiBase, apiGet, apiPost } from "./api";
-import {
-  formatDelta,
-  numericSeries,
-  phInterpretation,
-  seriesStats,
-} from "./metrics";
+import { formatDelta, numericSeries, seriesStats } from "./metrics";
 import type { BatteryMetric, LatestResponse, StatusResponse } from "./types";
 import "./App.css";
 
@@ -35,10 +17,6 @@ function fmt(v: number | null | undefined, nd = 2): string {
   if (v === null || v === undefined) return "—";
   if (Number.isNaN(v)) return "—";
   return v.toFixed(nd);
-}
-
-function anySeries(points: BatteryMetric[], key: keyof BatteryMetric): boolean {
-  return points.some((p) => p[key] !== null && p[key] !== undefined);
 }
 
 function spark(values: number[], max = SPARK_POINTS) {
@@ -174,7 +152,8 @@ export default function App() {
   };
 
   const last = points.length ? points[points.length - 1] : null;
-  const isTs = last?.source === "thingspeak";
+  /** Show main dashboard whenever ThingSpeak is streaming — do not require `last` (fixes empty UI before first sample). */
+  const showThingSpeakDashboard = Boolean(status?.mode === "thingspeak" && status?.streaming);
 
   const hasBatteryPack = useMemo(
     () => points.some((p) => p.cell_voltages && Object.keys(p.cell_voltages).length > 0),
@@ -188,17 +167,6 @@ export default function App() {
     }
     return Array.from(s).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }, [points]);
-
-  const hasEnvMetrics = useMemo(
-    () =>
-      anySeries(points, "humidity_pct") ||
-      anySeries(points, "tds_ppm") ||
-      anySeries(points, "ph") ||
-      anySeries(points, "water_quality_index"),
-    [points]
-  );
-
-  const showEnvGlance = !hasBatteryPack || hasEnvMetrics;
 
   const chartData = useMemo(() => {
     return points.map((p, idx) => {
@@ -225,49 +193,35 @@ export default function App() {
   }, [points, cellKeys]);
 
   const tempSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.temperature_c)), [points]);
-  const humSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.humidity_pct)), [points]);
-  const tdsSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.tds_ppm)), [points]);
-  const phSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.ph)), [points]);
-  const wqSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.water_quality_index)), [points]);
   const packVSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.voltage_v)), [points]);
   const currSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.current_a)), [points]);
   const socSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.soc_pct)), [points]);
 
   const insights = useMemo(() => {
-    if (!isTs || !points.length) return null;
+    if (!showThingSpeakDashboard || !points.length) return null;
     const lines: string[] = [];
-    if (hasBatteryPack) {
-      const volts = numericSeries(points, (p) => p.voltage_v);
-      if (volts.length) {
-        lines.push(
-          `Pack voltage range in view: ${Math.min(...volts).toFixed(2)} – ${Math.max(...volts).toFixed(2)} V`
-        );
-      }
-      const lastPt = points[points.length - 1]!;
-      if (lastPt.cell_voltages) {
-        const xs = Object.values(lastPt.cell_voltages);
-        if (xs.length > 1) {
-          const spread = Math.max(...xs) - Math.min(...xs);
-          lines.push(`Latest cell spread: ${spread.toFixed(3)} V`);
-        }
+    const volts = numericSeries(points, (p) => p.voltage_v);
+    if (volts.length && volts.some((v) => v > 0.001)) {
+      lines.push(
+        `Pack voltage range in view: ${Math.min(...volts).toFixed(2)} – ${Math.max(...volts).toFixed(2)} V`
+      );
+    }
+    const lastPt = points[points.length - 1]!;
+    if (lastPt.cell_voltages) {
+      const xs = Object.values(lastPt.cell_voltages);
+      if (xs.length > 1) {
+        const spread = Math.max(...xs) - Math.min(...xs);
+        lines.push(`Latest cell spread: ${spread.toFixed(3)} V`);
       }
     }
     const temps = numericSeries(points, (p) => p.temperature_c);
-    const phs = numericSeries(points, (p) => p.ph);
-    const tds = numericSeries(points, (p) => p.tds_ppm);
-    if (temps.length && (!hasBatteryPack || hasEnvMetrics)) {
+    if (temps.length) {
       lines.push(
-        `Temperature range in view: ${Math.min(...temps).toFixed(2)} – ${Math.max(...temps).toFixed(2)} °C`
+        `BMS temperature range in view: ${Math.min(...temps).toFixed(2)} – ${Math.max(...temps).toFixed(2)} °C`
       );
     }
-    if (phs.length) {
-      lines.push(`pH range in view: ${Math.min(...phs).toFixed(2)} – ${Math.max(...phs).toFixed(2)}`);
-    }
-    if (tds.length) {
-      lines.push(`TDS range in view: ${Math.min(...tds).toFixed(0)} – ${Math.max(...tds).toFixed(0)} ppm`);
-    }
     return lines.length ? lines : null;
-  }, [isTs, points, hasBatteryPack, hasEnvMetrics]);
+  }, [showThingSpeakDashboard, points]);
 
   const timeSpanLabel = useMemo(() => {
     if (points.length < 2) return null;
@@ -286,18 +240,10 @@ export default function App() {
       <header className="header">
         <div className="header__row">
           <div>
-            <h1>{hasBatteryPack ? "Battery analytics" : "Environmental analytics"}</h1>
+            <h1>Battery Analytics</h1>
             <p className="header__lede">
-              {hasBatteryPack ? (
-                <>
-                  Live BMS-style telemetry from ThingSpeak (per-cell V, pack I/T/SOC) — charts, ranges, and KPIs.
-                </>
-              ) : (
-                <>
-                  Live water &amp; environment telemetry from ThingSpeak — interactive charts, ranges, and at-a-glance
-                  KPIs.
-                </>
-              )}
+              Pack and per-cell voltages, current, temperature, and SOC from ThingSpeak (BMS text such as{" "}
+              <code className="mono">V1=3.7,…,I=1.2A,T=30C,SOC=75%</code> in any field).
             </p>
           </div>
           <div className="header__links">
@@ -401,14 +347,10 @@ export default function App() {
             <strong>Reading the dashboard</strong>
             <ul>
               <li>
-                <strong>KPI cards</strong> show the latest value, spark trend, and where the current reading sits between
-                min/max in the visible window.
+                <strong>KPI cards</strong> show the latest pack and BMS values; sparklines update as samples arrive.
               </li>
               <li>
-                <strong>Brush</strong> (grey bar under a chart) lets you zoom and pan the time range.
-              </li>
-              <li>
-                <strong>pH band</strong> highlights ~6.5–8.5 as a common “near neutral” band (informational only).
+                <strong>Brush</strong> (grey bar under a chart) zooms and pans the time range.
               </li>
             </ul>
           </div>
@@ -504,10 +446,8 @@ export default function App() {
             </div>
           )}
 
-          {last && isTs && (
+          {showThingSpeakDashboard && (
             <>
-              {hasBatteryPack && (
-                <>
                   <section className="section">
                     <h2 className="section__title">Battery pack</h2>
                     <p className="section__sub">
@@ -519,7 +459,7 @@ export default function App() {
                       <KpiCard
                         title="Pack voltage"
                         unit="V"
-                        value={fmt(last.voltage_v)}
+                        value={last ? fmt(last.voltage_v) : "—"}
                         sparkline={spark(numericSeries(points, (p) => p.voltage_v))}
                         min={packVSt?.min}
                         max={packVSt?.max}
@@ -533,7 +473,7 @@ export default function App() {
                       <KpiCard
                         title="Current"
                         unit="A"
-                        value={fmt(last.current_a)}
+                        value={last ? fmt(last.current_a) : "—"}
                         sparkline={spark(numericSeries(points, (p) => p.current_a))}
                         min={currSt?.min}
                         max={currSt?.max}
@@ -546,7 +486,7 @@ export default function App() {
                       <KpiCard
                         title="BMS temperature"
                         unit="°C"
-                        value={fmt(last.temperature_c)}
+                        value={last ? fmt(last.temperature_c) : "—"}
                         sparkline={spark(numericSeries(points, (p) => p.temperature_c))}
                         min={tempSt?.min}
                         max={tempSt?.max}
@@ -559,7 +499,7 @@ export default function App() {
                       <KpiCard
                         title="State of charge"
                         unit="%"
-                        value={last.soc_pct != null ? fmt(last.soc_pct, 0) : "—"}
+                        value={last != null && last.soc_pct != null ? fmt(last.soc_pct, 0) : "—"}
                         sparkline={spark(numericSeries(points, (p) => p.soc_pct))}
                         min={socSt?.min}
                         max={socSt?.max}
@@ -568,7 +508,14 @@ export default function App() {
                         }
                       />
                     </div>
-                    {cellKeys.length > 0 && (
+                    {points.length > 0 && !hasBatteryPack && (
+                      <div className="banner warn" style={{ marginTop: "1rem" }}>
+                        <strong>No BMS line detected in feeds yet.</strong> Put telemetry such as{" "}
+                        <code className="mono">V1=3.7,V2=…,I=1.2A,T=30C,SOC=75%</code> into any ThingSpeak field so pack
+                        and cells populate (raw env-only fields show temperature as field1 only).
+                      </div>
+                    )}
+                    {cellKeys.length > 0 && last && (
                       <div className="battery-cells" aria-label="Latest cell voltages">
                         {cellKeys.map((k) => (
                           <div key={k} className="battery-cell-pill">
@@ -586,41 +533,47 @@ export default function App() {
                     <h2 className="section__title">Pack &amp; cell voltages</h2>
                     <p className="section__sub">Pack total and per-cell traces (volts).</p>
                     <div className="chart-wrap chart-wrap--tall">
-                      <ResponsiveContainer width="100%" height={420}>
-                        <ComposedChart data={chartData} margin={{ top: 12, right: 12, left: 4, bottom: 4 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
-                          <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
-                          <YAxis
-                            tick={{ fill: "#8b9cb3", fontSize: 11 }}
-                            domain={["auto", "auto"]}
-                            label={{ value: "V", angle: -90, position: "insideLeft", fill: "#8b9cb3" }}
-                          />
-                          <Tooltip content={<ChartTooltip />} />
-                          <Legend />
-                          <Line
-                            type="monotone"
-                            dataKey="voltage_v"
-                            name="Pack V"
-                            stroke="#e8edf5"
-                            strokeWidth={2.5}
-                            dot={false}
-                            isAnimationActive={points.length < 500}
-                          />
-                          {cellKeys.map((k, i) => (
+                      {points.length === 0 ? (
+                        <div className="chart-empty">
+                          No time-series samples yet. After ThingSpeak returns rows, voltage traces appear here.
+                        </div>
+                      ) : (
+                        <ResponsiveContainer width="100%" height={420}>
+                          <ComposedChart data={chartData} margin={{ top: 12, right: 12, left: 4, bottom: 4 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
+                            <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
+                            <YAxis
+                              tick={{ fill: "#8b9cb3", fontSize: 11 }}
+                              domain={["auto", "auto"]}
+                              label={{ value: "V", angle: -90, position: "insideLeft", fill: "#8b9cb3" }}
+                            />
+                            <Tooltip content={<ChartTooltip />} />
+                            <Legend />
                             <Line
-                              key={k}
                               type="monotone"
-                              dataKey={`cell_${k}`}
-                              name={`${k}`}
-                              stroke={CELL_LINE_COLORS[i % CELL_LINE_COLORS.length]}
-                              strokeWidth={1.75}
+                              dataKey="voltage_v"
+                              name="Pack V"
+                              stroke="#e8edf5"
+                              strokeWidth={2.5}
                               dot={false}
                               isAnimationActive={points.length < 500}
                             />
-                          ))}
-                          <Brush dataKey="idx" height={28} stroke="#22d3ee" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
-                        </ComposedChart>
-                      </ResponsiveContainer>
+                            {cellKeys.map((k, i) => (
+                              <Line
+                                key={k}
+                                type="monotone"
+                                dataKey={`cell_${k}`}
+                                name={`${k}`}
+                                stroke={CELL_LINE_COLORS[i % CELL_LINE_COLORS.length]}
+                                strokeWidth={1.75}
+                                dot={false}
+                                isAnimationActive={points.length < 500}
+                              />
+                            ))}
+                            <Brush dataKey="idx" height={28} stroke="#22d3ee" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      )}
                     </div>
                   </section>
 
@@ -628,278 +581,55 @@ export default function App() {
                     <h2 className="section__title">Current &amp; state of charge</h2>
                     <p className="section__sub">Amperes and SOC (%).</p>
                     <div className="chart-wrap chart-wrap--tall">
-                      <ResponsiveContainer width="100%" height={360}>
-                        <ComposedChart data={chartData} margin={{ top: 12, right: 16, left: 4, bottom: 4 }}>
-                          <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
-                          <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
-                          <YAxis
-                            yAxisId="a"
-                            tick={{ fill: "#8b9cb3", fontSize: 11 }}
-                            label={{ value: "A", angle: -90, position: "insideLeft", fill: "#8b9cb3" }}
-                          />
-                          <YAxis
-                            yAxisId="b"
-                            orientation="right"
-                            domain={[0, 100]}
-                            tick={{ fill: "#8b9cb3", fontSize: 11 }}
-                            label={{ value: "% SOC", angle: 90, position: "insideRight", fill: "#8b9cb3" }}
-                          />
-                          <Tooltip content={<ChartTooltip />} />
-                          <Legend />
-                          <Line
-                            yAxisId="a"
-                            type="monotone"
-                            dataKey="current_a"
-                            name="Current A"
-                            stroke="#fbbf24"
-                            strokeWidth={2}
-                            dot={false}
-                            isAnimationActive={points.length < 500}
-                          />
-                          <Line
-                            yAxisId="b"
-                            type="monotone"
-                            dataKey="soc_pct"
-                            name="SOC %"
-                            stroke="#34d399"
-                            strokeWidth={2}
-                            dot={false}
-                            isAnimationActive={points.length < 500}
-                          />
-                          <Brush dataKey="idx" height={28} stroke="#fbbf24" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
-                        </ComposedChart>
-                      </ResponsiveContainer>
+                      {points.length === 0 ? (
+                        <div className="chart-empty">
+                          No samples yet — current and SOC lines appear when your channel sends data.
+                        </div>
+                      ) : (
+                        <ResponsiveContainer width="100%" height={360}>
+                          <ComposedChart data={chartData} margin={{ top: 12, right: 16, left: 4, bottom: 4 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
+                            <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
+                            <YAxis
+                              yAxisId="a"
+                              tick={{ fill: "#8b9cb3", fontSize: 11 }}
+                              label={{ value: "A", angle: -90, position: "insideLeft", fill: "#8b9cb3" }}
+                            />
+                            <YAxis
+                              yAxisId="b"
+                              orientation="right"
+                              domain={[0, 100]}
+                              tick={{ fill: "#8b9cb3", fontSize: 11 }}
+                              label={{ value: "% SOC", angle: 90, position: "insideRight", fill: "#8b9cb3" }}
+                            />
+                            <Tooltip content={<ChartTooltip />} />
+                            <Legend />
+                            <Line
+                              yAxisId="a"
+                              type="monotone"
+                              dataKey="current_a"
+                              name="Current A"
+                              stroke="#fbbf24"
+                              strokeWidth={2}
+                              dot={false}
+                              isAnimationActive={points.length < 500}
+                            />
+                            <Line
+                              yAxisId="b"
+                              type="monotone"
+                              dataKey="soc_pct"
+                              name="SOC %"
+                              stroke="#34d399"
+                              strokeWidth={2}
+                              dot={false}
+                              isAnimationActive={points.length < 500}
+                            />
+                            <Brush dataKey="idx" height={28} stroke="#fbbf24" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      )}
                     </div>
                   </section>
-                </>
-              )}
-
-              {showEnvGlance && (
-              <section className="section">
-                <h2 className="section__title">At a glance</h2>
-                <p className="section__sub">Latest reading vs min–max in the chart window (use brush below to change the window).</p>
-                <div className="kpi-grid">
-                  {anySeries(points, "temperature_c") && !hasBatteryPack && (
-                  <KpiCard
-                    title="Temperature"
-                    unit="°C"
-                    value={fmt(last.temperature_c)}
-                    sparkline={spark(numericSeries(points, (p) => p.temperature_c))}
-                    min={tempSt?.min}
-                    max={tempSt?.max}
-                    deltaLabel={
-                      tempSt && tempSt.delta !== 0
-                        ? formatDelta(tempSt.delta, "°C") + " window"
-                        : undefined
-                    }
-                    footnote="Typical comfort ~20–26 °C (context-dependent)"
-                  />
-                  )}
-                  {anySeries(points, "humidity_pct") && (
-                  <KpiCard
-                    title="Humidity"
-                    unit="%"
-                    value={fmt(last.humidity_pct ?? undefined)}
-                    sparkline={spark(numericSeries(points, (p) => p.humidity_pct))}
-                    min={humSt?.min}
-                    max={humSt?.max}
-                    deltaLabel={
-                      humSt && humSt.delta !== 0 ? formatDelta(humSt.delta, "%") + " window" : undefined
-                    }
-                  />
-                  )}
-                  {anySeries(points, "tds_ppm") && (
-                  <KpiCard
-                    title="TDS"
-                    unit="ppm"
-                    value={fmt(last.tds_ppm ?? undefined, 1)}
-                    sparkline={spark(numericSeries(points, (p) => p.tds_ppm))}
-                    min={tdsSt?.min}
-                    max={tdsSt?.max}
-                    deltaLabel={
-                      tdsSt && tdsSt.delta !== 0 ? formatDelta(tdsSt.delta, "ppm", 0) + " window" : undefined
-                    }
-                    footnote="Total dissolved solids — calibrate to your application"
-                  />
-                  )}
-                  {anySeries(points, "ph") && (
-                  <KpiCard
-                    title="pH"
-                    unit=""
-                    value={fmt(last.ph ?? undefined)}
-                    subtitle={last.ph != null ? phInterpretation(last.ph).label : undefined}
-                    tone={last.ph != null ? phInterpretation(last.ph).tone : "default"}
-                    sparkline={spark(numericSeries(points, (p) => p.ph))}
-                    min={phSt?.min}
-                    max={phSt?.max}
-                    deltaLabel={
-                      phSt && phSt.delta !== 0 ? formatDelta(phSt.delta, "pH") + " window" : undefined
-                    }
-                    footnote="Band 6.5–8.5 shown on chart as reference"
-                  />
-                  )}
-                  {anySeries(points, "water_quality_index") && (
-                  <KpiCard
-                    title="Water quality"
-                    unit="idx"
-                    value={fmt(last.water_quality_index ?? undefined)}
-                    sparkline={spark(numericSeries(points, (p) => p.water_quality_index))}
-                    min={wqSt?.min}
-                    max={wqSt?.max}
-                    footnote="Field 5 on ThingSpeak (if configured)"
-                  />
-                  )}
-                </div>
-              </section>
-              )}
-
-              {(anySeries(points, "temperature_c") || anySeries(points, "humidity_pct")) && (
-                <section className="section">
-                  <h2 className="section__title">Climate — temperature & humidity</h2>
-                  <p className="section__sub">Area emphasis on trends; drag the brush to focus a time range.</p>
-                  <div className="chart-wrap chart-wrap--tall">
-                    <ResponsiveContainer width="100%" height={420}>
-                      <ComposedChart data={chartData} margin={{ top: 12, right: 12, left: 4, bottom: 4 }}>
-                        <defs>
-                          <linearGradient id="tempFill" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#3d9cf0" stopOpacity={0.35} />
-                            <stop offset="100%" stopColor="#3d9cf0" stopOpacity={0} />
-                          </linearGradient>
-                          <linearGradient id="humFill" x1="0" y1="0" x2="0" y2="1">
-                            <stop offset="0%" stopColor="#34d399" stopOpacity={0.3} />
-                            <stop offset="100%" stopColor="#34d399" stopOpacity={0} />
-                          </linearGradient>
-                        </defs>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
-                        <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
-                        <YAxis
-                          yAxisId="l"
-                          tick={{ fill: "#8b9cb3", fontSize: 11 }}
-                          label={{ value: "°C", angle: -90, position: "insideLeft", fill: "#8b9cb3" }}
-                        />
-                        <YAxis
-                          yAxisId="r"
-                          orientation="right"
-                          tick={{ fill: "#8b9cb3", fontSize: 11 }}
-                          label={{ value: "% RH", angle: 90, position: "insideRight", fill: "#8b9cb3" }}
-                        />
-                        <Tooltip content={<ChartTooltip />} />
-                        <Legend />
-                        {anySeries(points, "temperature_c") && (
-                          <Area
-                            yAxisId="l"
-                            type="monotone"
-                            dataKey="temperature_c"
-                            name="Temperature °C"
-                            stroke="#3d9cf0"
-                            fill="url(#tempFill)"
-                            strokeWidth={2}
-                            dot={false}
-                            isAnimationActive={points.length < 500}
-                          />
-                        )}
-                        {anySeries(points, "humidity_pct") && (
-                          <Area
-                            yAxisId="r"
-                            type="monotone"
-                            dataKey="humidity_pct"
-                            name="Humidity %"
-                            stroke="#34d399"
-                            fill="url(#humFill)"
-                            strokeWidth={2}
-                            dot={false}
-                            isAnimationActive={points.length < 500}
-                          />
-                        )}
-                        <Brush dataKey="idx" height={28} stroke="#3d9cf0" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
-                </section>
-              )}
-
-              {(anySeries(points, "tds_ppm") || anySeries(points, "ph") || anySeries(points, "water_quality_index")) && (
-                <section className="section">
-                  <h2 className="section__title">Water chemistry</h2>
-                  <p className="section__sub">
-                    pH reference band (6.5–8.5) is a common informational range — not a compliance line. TDS scale
-                    depends on calibration.
-                  </p>
-                  <div className="chart-wrap chart-wrap--tall">
-                    <ResponsiveContainer width="100%" height={440}>
-                      <ComposedChart data={chartData} margin={{ top: 12, right: 16, left: 4, bottom: 4 }}>
-                        <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
-                        <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
-                        <YAxis
-                          yAxisId="a"
-                          tick={{ fill: "#8b9cb3", fontSize: 11 }}
-                          label={{ value: "TDS / WQ", angle: -90, position: "insideLeft", fill: "#8b9cb3" }}
-                        />
-                        <YAxis
-                          yAxisId="b"
-                          orientation="right"
-                          domain={[0, 14]}
-                          tick={{ fill: "#8b9cb3", fontSize: 11 }}
-                          label={{ value: "pH", angle: 90, position: "insideRight", fill: "#8b9cb3" }}
-                        />
-                        {anySeries(points, "ph") && (
-                          <>
-                            <ReferenceArea
-                              yAxisId="b"
-                              y1={6.5}
-                              y2={8.5}
-                              strokeOpacity={0}
-                              fill="#34d399"
-                              fillOpacity={0.12}
-                            />
-                            <ReferenceLine yAxisId="b" y={7} stroke="#94a3b8" strokeDasharray="4 4" />
-                          </>
-                        )}
-                        <Tooltip content={<ChartTooltip />} />
-                        <Legend />
-                        {anySeries(points, "tds_ppm") && (
-                          <Line
-                            yAxisId="a"
-                            type="monotone"
-                            dataKey="tds_ppm"
-                            name="TDS (ppm)"
-                            stroke="#fbbf24"
-                            dot={false}
-                            strokeWidth={2}
-                            isAnimationActive={points.length < 500}
-                          />
-                        )}
-                        {anySeries(points, "ph") && (
-                          <Line
-                            yAxisId="b"
-                            type="monotone"
-                            dataKey="ph"
-                            name="pH"
-                            stroke="#c4b5fd"
-                            dot={false}
-                            strokeWidth={2.5}
-                            isAnimationActive={points.length < 500}
-                          />
-                        )}
-                        {anySeries(points, "water_quality_index") && (
-                          <Line
-                            yAxisId="a"
-                            type="monotone"
-                            dataKey="water_quality_index"
-                            name="Water quality"
-                            stroke="#f472b6"
-                            dot={false}
-                            strokeWidth={2}
-                            strokeDasharray="6 4"
-                            isAnimationActive={points.length < 500}
-                          />
-                        )}
-                        <Brush dataKey="idx" height={28} stroke="#a78bfa" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
-                      </ComposedChart>
-                    </ResponsiveContainer>
-                  </div>
-                </section>
-              )}
 
               {insights && (
                 <section className="section">
@@ -914,13 +644,7 @@ export default function App() {
             </>
           )}
 
-          {last && !isTs && (
-            <div className="banner">
-              Non–ThingSpeak telemetry is available from the API; this dashboard is optimized for ThingSpeak fields.
-            </div>
-          )}
-
-          {!last && !err && status?.mode !== "thingspeak" && (
+          {!showThingSpeakDashboard && !err && (
             <div className="banner">Connect to ThingSpeak in the sidebar to load telemetry.</div>
           )}
         </main>
