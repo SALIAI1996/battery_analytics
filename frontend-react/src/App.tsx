@@ -5,6 +5,12 @@ import {
   ResponsiveContainer,
   Tooltip,
   Cell,
+  CartesianGrid,
+  ComposedChart,
+  Legend,
+  Line,
+  XAxis,
+  YAxis,
 } from "recharts";
 import { apiBase, apiGet, apiPost } from "./api";
 import type { BatteryMetric, LatestResponse, StatusResponse } from "./types";
@@ -13,6 +19,7 @@ import "./App.css";
 const MAX_POINTS = 4000;
 
 const PIE_COLORS = ["#22d3ee", "#a78bfa", "#fbbf24", "#fb7185", "#4ade80", "#f472b6"];
+const LINE_COLORS = ["#22d3ee", "#a78bfa", "#fbbf24", "#fb7185"];
 
 function fmt(v: number | null | undefined, nd = 2): string {
   if (v === null || v === undefined) return "—";
@@ -42,6 +49,7 @@ function clamp(x: number, lo: number, hi: number) {
 
 type PieSpec = {
   key: string;
+  label: string;
   value: number | null;
   unit: string;
   fraction01: number; // 0..1 for the donut fill
@@ -209,6 +217,7 @@ export default function App() {
     const base: PieSpec[] = [
       {
         key: "soc",
+        label: "SOC",
         value: soc,
         unit: "%",
         fraction01: clamp01(((soc ?? 0) / 100) || 0),
@@ -222,6 +231,7 @@ export default function App() {
       const cv = v(cells[k]);
       base.push({
         key: k,
+        label: k.replace(/^V/i, "Cell "),
         value: cv,
         unit: "V",
         fraction01: clamp01(((cv ?? 0) / maxCellV) || 0),
@@ -232,6 +242,7 @@ export default function App() {
     base.push(
       {
         key: "temp",
+        label: "Temp",
         value: temp,
         unit: "°C",
         fraction01: clamp01(((clamp(temp ?? 0, 0, maxTempC)) / maxTempC) || 0),
@@ -239,6 +250,7 @@ export default function App() {
       },
       {
         key: "current",
+        label: "Current",
         value: cur,
         unit: "A",
         fraction01: clamp01(((clamp(Math.abs(cur ?? 0), 0, maxCurrentA)) / maxCurrentA) || 0),
@@ -248,6 +260,21 @@ export default function App() {
 
     return base;
   }, [last, cellKeys]);
+
+  const voltageSeries = useMemo(() => {
+    const ks = (cellKeys.length ? cellKeys : ["V1", "V2", "V3", "V4"]).slice(0, 4);
+    const rows = viewPoints.map((p, idx) => {
+      const d = new Date(p.ts);
+      const row: Record<string, string | number | undefined> = {
+        idx,
+        timeShort: d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+        timeFull: d.toLocaleString(),
+      };
+      for (const k of ks) row[`cell_${k}`] = p.cell_voltages?.[k] ?? undefined;
+      return row;
+    });
+    return { keys: ks, rows };
+  }, [viewPoints, cellKeys]);
 
   return (
     <div className="app">
@@ -447,6 +474,7 @@ export default function App() {
                 <div className="pie-min-grid" aria-label="Battery pie charts">
                   {pies.map((p) => (
                     <div key={p.key} className="pie-tile">
+                      <div className="pie-tile__label">{p.label}</div>
                       <div className="pie-tile__chart">
                         <ResponsiveContainer width="100%" height={240}>
                           <PieChart>
@@ -479,6 +507,37 @@ export default function App() {
                       </div>
                     </div>
                   ))}
+                </div>
+              </section>
+
+              <section className="section section--minimal">
+                <div className="line-card">
+                  <div className="line-card__label">Cell voltages</div>
+                  {voltageSeries.rows.length === 0 ? (
+                    <div className="chart-empty">No samples yet.</div>
+                  ) : (
+                    <ResponsiveContainer width="100%" height={320}>
+                      <ComposedChart data={voltageSeries.rows} margin={{ top: 12, right: 12, left: 4, bottom: 4 }}>
+                        <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
+                        <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
+                        <YAxis tick={{ fill: "#8b9cb3", fontSize: 11 }} />
+                        <Tooltip />
+                        <Legend />
+                        {voltageSeries.keys.map((k, i) => (
+                          <Line
+                            key={k}
+                            type="monotone"
+                            dataKey={`cell_${k}`}
+                            name={k.replace(/^V/i, "Cell ")}
+                            stroke={LINE_COLORS[i % LINE_COLORS.length]!}
+                            strokeWidth={2.2}
+                            dot={false}
+                            isAnimationActive={voltageSeries.rows.length < 500}
+                          />
+                        ))}
+                      </ComposedChart>
+                    </ResponsiveContainer>
+                  )}
                 </div>
               </section>
             </>

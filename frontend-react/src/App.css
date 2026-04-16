@@ -703,6 +703,14 @@
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
 }
 
+.pie-tile__label {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.9);
+  margin: 0.1rem 0 0.35rem;
+}
+
 .pie-tile:hover {
   transform: translateY(-2px);
   box-shadow: 0 18px 54px rgba(0, 0, 0, 0.33);
@@ -740,6 +748,22 @@
   color: rgba(148, 163, 184, 0.9);
   letter-spacing: 0.06em;
   text-transform: uppercase;
+}
+
+.line-card {
+  border: 1px solid rgba(36, 48, 68, 0.85);
+  background: rgba(15, 22, 32, 0.55);
+  border-radius: 14px;
+  padding: 0.85rem 0.85rem 0.6rem;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.22);
+}
+
+.line-card__label {
+  font-size: 0.78rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: rgba(148, 163, 184, 0.9);
+  margin: 0.1rem 0 0.4rem;
 }
 
 .chart-empty {
