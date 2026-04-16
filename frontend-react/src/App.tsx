@@ -1,5 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Brush, CartesianGrid, ComposedChart, Legend, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
+import {
+  Brush,
+  CartesianGrid,
+  ComposedChart,
+  Legend,
+  Line,
+  Pie,
+  PieChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+  Cell,
+} from "recharts";
 import { ChartTooltip } from "./components/ChartTooltip";
 import { KpiCard } from "./components/KpiCard";
 import { apiBase, apiGet, apiPost } from "./api";
@@ -12,6 +25,7 @@ const SPARK_POINTS = 80;
 
 /** Distinct stroke colors for per-cell voltage lines (cycles if more cells). */
 const CELL_LINE_COLORS = ["#22d3ee", "#a78bfa", "#fbbf24", "#fb7185", "#4ade80", "#f472b6"];
+const PIE_COLORS = ["#22d3ee", "#a78bfa", "#fbbf24", "#fb7185", "#4ade80", "#f472b6"];
 
 function fmt(v: number | null | undefined, nd = 2): string {
   if (v === null || v === undefined) return "—";
@@ -22,6 +36,12 @@ function fmt(v: number | null | undefined, nd = 2): string {
 function spark(values: number[], max = SPARK_POINTS) {
   const slice = values.length > max ? values.slice(-max) : values;
   return slice.map((v) => ({ v }));
+}
+
+function pct(v: number | null | undefined, nd = 0): string {
+  if (v === null || v === undefined) return "—";
+  if (Number.isNaN(v)) return "—";
+  return `${v.toFixed(nd)}%`;
 }
 
 export default function App() {
@@ -35,6 +55,7 @@ export default function App() {
   const [readKey, setReadKey] = useState("");
   const [pollSec, setPollSec] = useState(15);
   const [initialN, setInitialN] = useState(500);
+  const [viewN, setViewN] = useState<10 | 50 | 100>(100);
   const [tsChannelMeta, setTsChannelMeta] = useState<{ name?: string } | null>(null);
 
   const baseConfigured = useMemo(() => {
@@ -84,7 +105,8 @@ export default function App() {
   }, [refreshStatus]);
 
   useEffect(() => {
-    const id = window.setInterval(pullLatest, 1500);
+    // Refresh the UI on a human-friendly cadence; backend poll interval is configurable (default 15s).
+    const id = window.setInterval(pullLatest, 10_000);
     return () => window.clearInterval(id);
   }, [pullLatest]);
 
@@ -133,6 +155,7 @@ export default function App() {
       setPoints([]);
       setLastTs(null);
       await refreshStatus();
+      void pullLatest();
     } catch (e) {
       setErr(e instanceof Error ? e.message : String(e));
     } finally {
@@ -155,25 +178,26 @@ export default function App() {
     }
   };
 
-  const last = points.length ? points[points.length - 1] : null;
+  const viewPoints = useMemo(() => (points.length > viewN ? points.slice(-viewN) : points), [points, viewN]);
+  const last = viewPoints.length ? viewPoints[viewPoints.length - 1] : null;
   /** Show main dashboard whenever ThingSpeak is streaming — do not require `last` (fixes empty UI before first sample). */
   const showThingSpeakDashboard = Boolean(status?.mode === "thingspeak" && status?.streaming);
 
   const hasBatteryPack = useMemo(
-    () => points.some((p) => p.cell_voltages && Object.keys(p.cell_voltages).length > 0),
-    [points]
+    () => viewPoints.some((p) => p.cell_voltages && Object.keys(p.cell_voltages).length > 0),
+    [viewPoints]
   );
 
   const cellKeys = useMemo(() => {
     const s = new Set<string>();
-    for (const p of points) {
+    for (const p of viewPoints) {
       if (p.cell_voltages) Object.keys(p.cell_voltages).forEach((k) => s.add(k));
     }
     return Array.from(s).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
-  }, [points]);
+  }, [viewPoints]);
 
   const chartData = useMemo(() => {
-    return points.map((p, idx) => {
+    return viewPoints.map((p, idx) => {
       const d = new Date(p.ts);
       const row: Record<string, string | number | undefined> = {
         idx,
@@ -194,23 +218,23 @@ export default function App() {
       }
       return row;
     });
-  }, [points, cellKeys]);
+  }, [viewPoints, cellKeys]);
 
-  const tempSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.temperature_c)), [points]);
-  const packVSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.voltage_v)), [points]);
-  const currSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.current_a)), [points]);
-  const socSt = useMemo(() => seriesStats(numericSeries(points, (p) => p.soc_pct)), [points]);
+  const tempSt = useMemo(() => seriesStats(numericSeries(viewPoints, (p) => p.temperature_c)), [viewPoints]);
+  const packVSt = useMemo(() => seriesStats(numericSeries(viewPoints, (p) => p.voltage_v)), [viewPoints]);
+  const currSt = useMemo(() => seriesStats(numericSeries(viewPoints, (p) => p.current_a)), [viewPoints]);
+  const socSt = useMemo(() => seriesStats(numericSeries(viewPoints, (p) => p.soc_pct)), [viewPoints]);
 
   const insights = useMemo(() => {
-    if (!showThingSpeakDashboard || !points.length) return null;
+    if (!showThingSpeakDashboard || !viewPoints.length) return null;
     const lines: string[] = [];
-    const volts = numericSeries(points, (p) => p.voltage_v);
+    const volts = numericSeries(viewPoints, (p) => p.voltage_v);
     if (volts.length && volts.some((v) => v > 0.001)) {
       lines.push(
         `Pack voltage range in view: ${Math.min(...volts).toFixed(2)} – ${Math.max(...volts).toFixed(2)} V`
       );
     }
-    const lastPt = points[points.length - 1]!;
+    const lastPt = viewPoints[viewPoints.length - 1]!;
     if (lastPt.cell_voltages) {
       const xs = Object.values(lastPt.cell_voltages);
       if (xs.length > 1) {
@@ -218,24 +242,24 @@ export default function App() {
         lines.push(`Latest cell spread: ${spread.toFixed(3)} V`);
       }
     }
-    const temps = numericSeries(points, (p) => p.temperature_c);
+    const temps = numericSeries(viewPoints, (p) => p.temperature_c);
     if (temps.length) {
       lines.push(
         `BMS temperature range in view: ${Math.min(...temps).toFixed(2)} – ${Math.max(...temps).toFixed(2)} °C`
       );
     }
     return lines.length ? lines : null;
-  }, [showThingSpeakDashboard, points]);
+  }, [showThingSpeakDashboard, viewPoints]);
 
   const timeSpanLabel = useMemo(() => {
-    if (points.length < 2) return null;
-    const a = new Date(points[0]!.ts);
-    const b = new Date(points[points.length - 1]!.ts);
+    if (viewPoints.length < 2) return null;
+    const a = new Date(viewPoints[0]!.ts);
+    const b = new Date(viewPoints[viewPoints.length - 1]!.ts);
     const mins = (b.getTime() - a.getTime()) / 60000;
     if (mins < 120) return `${Math.round(mins)} min window`;
     if (mins < 2880) return `${(mins / 60).toFixed(1)} h window`;
     return `${(mins / 1440).toFixed(1)} d window`;
-  }, [points]);
+  }, [viewPoints]);
 
   const lastSampleLabel = last ? new Date(last.ts).toLocaleString() : null;
 
@@ -329,6 +353,18 @@ export default function App() {
               value={initialN}
               onChange={(e) => setInitialN(Number(e.target.value))}
             />
+          </div>
+          <div className="field">
+            <label htmlFor="view">Show last N records</label>
+            <select
+              id="view"
+              value={viewN}
+              onChange={(e) => setViewN(Number(e.target.value) as 10 | 50 | 100)}
+            >
+              <option value={10}>Last 10</option>
+              <option value={50}>Last 50</option>
+              <option value={100}>Last 100</option>
+            </select>
           </div>
           <div className="row">
             <button type="button" className="btn btn-primary" disabled={loading} onClick={connectThingSpeak}>
@@ -464,7 +500,7 @@ export default function App() {
                         title="Pack voltage"
                         unit="V"
                         value={last ? fmt(last.voltage_v) : "—"}
-                        sparkline={spark(numericSeries(points, (p) => p.voltage_v))}
+                        sparkline={spark(numericSeries(viewPoints, (p) => p.voltage_v))}
                         min={packVSt?.min}
                         max={packVSt?.max}
                         deltaLabel={
@@ -478,7 +514,7 @@ export default function App() {
                         title="Current"
                         unit="A"
                         value={last ? fmt(last.current_a) : "—"}
-                        sparkline={spark(numericSeries(points, (p) => p.current_a))}
+                        sparkline={spark(numericSeries(viewPoints, (p) => p.current_a))}
                         min={currSt?.min}
                         max={currSt?.max}
                         deltaLabel={
@@ -491,7 +527,7 @@ export default function App() {
                         title="BMS temperature"
                         unit="°C"
                         value={last ? fmt(last.temperature_c) : "—"}
-                        sparkline={spark(numericSeries(points, (p) => p.temperature_c))}
+                        sparkline={spark(numericSeries(viewPoints, (p) => p.temperature_c))}
                         min={tempSt?.min}
                         max={tempSt?.max}
                         deltaLabel={
@@ -504,7 +540,7 @@ export default function App() {
                         title="State of charge"
                         unit="%"
                         value={last != null && last.soc_pct != null ? fmt(last.soc_pct, 0) : "—"}
-                        sparkline={spark(numericSeries(points, (p) => p.soc_pct))}
+                        sparkline={spark(numericSeries(viewPoints, (p) => p.soc_pct))}
                         min={socSt?.min}
                         max={socSt?.max}
                         deltaLabel={
@@ -512,11 +548,19 @@ export default function App() {
                         }
                       />
                     </div>
-                    {points.length > 0 && !hasBatteryPack && (
+                    {viewPoints.length > 0 && !hasBatteryPack && (
                       <div className="banner warn" style={{ marginTop: "1rem" }}>
-                        <strong>No BMS line detected in feeds yet.</strong> Put telemetry such as{" "}
-                        <code className="mono">V1=3.7,V2=…,I=1.2A,T=30C,SOC=75%</code> into any ThingSpeak field so pack
-                        and cells populate (raw env-only fields show temperature as field1 only).
+                        <strong>No per-cell voltages detected yet.</strong> Your channel can publish either:
+                        <ul className="thingspeak-wait__list">
+                          <li>
+                            <strong>BMS text</strong> in any field:{" "}
+                            <code className="mono">V1=3.7,V2=…,I=1.2A,T=30C,SOC=75%</code>
+                          </li>
+                          <li>
+                            <strong>Numeric fields</strong>: field1..4 = Cell 1..4, field5 = SOC (%), field6 = Temp (°C),
+                            field7 = Current (A)
+                          </li>
+                        </ul>
                       </div>
                     )}
                     {cellKeys.length > 0 && last && (
@@ -534,10 +578,81 @@ export default function App() {
                   </section>
 
                   <section className="section">
+                    <h2 className="section__title">Battery distribution</h2>
+                    <p className="section__sub">SOC donut and cell voltage share (percent of pack).</p>
+                    <div className="chart-wrap chart-wrap--tall">
+                      {last == null ? (
+                        <div className="chart-empty">No samples yet — pie charts will appear after the first ThingSpeak row.</div>
+                      ) : (
+                        <div className="pie-grid">
+                          <div className="pie-card">
+                            <div className="pie-card__title">State of charge</div>
+                            <ResponsiveContainer width="100%" height={260}>
+                              <PieChart>
+                                <Tooltip />
+                                <Pie
+                                  data={[
+                                    { name: "SOC", value: Math.max(0, Math.min(100, last.soc_pct ?? 0)) },
+                                    { name: "Remaining", value: Math.max(0, 100 - Math.max(0, Math.min(100, last.soc_pct ?? 0))) },
+                                  ]}
+                                  dataKey="value"
+                                  nameKey="name"
+                                  innerRadius={70}
+                                  outerRadius={95}
+                                  paddingAngle={2}
+                                  startAngle={90}
+                                  endAngle={-270}
+                                >
+                                  <Cell fill="#34d399" />
+                                  <Cell fill="rgba(148, 163, 184, 0.25)" />
+                                </Pie>
+                              </PieChart>
+                            </ResponsiveContainer>
+                            <div className="pie-card__kpi">
+                              <span className="pie-card__kpi-k">SOC</span>
+                              <span className="pie-card__kpi-v">{pct(last.soc_pct, 0)}</span>
+                            </div>
+                          </div>
+
+                          <div className="pie-card">
+                            <div className="pie-card__title">Cell voltages</div>
+                            <ResponsiveContainer width="100%" height={260}>
+                              <PieChart>
+                                <Tooltip />
+                                <Pie
+                                  data={(() => {
+                                    const cells = last.cell_voltages ?? {};
+                                    const entries = Object.entries(cells).filter(([, v]) => typeof v === "number" && !Number.isNaN(v));
+                                    const sum = entries.reduce((a, [, v]) => a + v, 0);
+                                    if (!entries.length || sum <= 0) return [{ name: "No cell data", value: 1 }];
+                                    return entries.map(([k, v]) => ({ name: k, value: (v / sum) * 100 }));
+                                  })()}
+                                  dataKey="value"
+                                  nameKey="name"
+                                  innerRadius={60}
+                                  outerRadius={95}
+                                  paddingAngle={2}
+                                >
+                                  {(cellKeys.length ? cellKeys : ["V1", "V2", "V3", "V4"]).map((k, i) => (
+                                    <Cell key={k} fill={PIE_COLORS[i % PIE_COLORS.length]} />
+                                  ))}
+                                </Pie>
+                              </PieChart>
+                            </ResponsiveContainer>
+                            <div className="pie-card__hint">
+                              {last.cell_voltages ? "Slice = % of total pack voltage" : "No per-cell fields found in the latest sample"}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="section">
                     <h2 className="section__title">Pack &amp; cell voltages</h2>
                     <p className="section__sub">Pack total and per-cell traces (volts).</p>
                     <div className="chart-wrap chart-wrap--tall">
-                      {points.length === 0 ? (
+                      {viewPoints.length === 0 ? (
                         <div className="chart-empty">
                           No time-series samples yet. After ThingSpeak returns rows, voltage traces appear here.
                         </div>
@@ -560,7 +675,7 @@ export default function App() {
                               stroke="#e8edf5"
                               strokeWidth={2.5}
                               dot={false}
-                              isAnimationActive={points.length < 500}
+                              isAnimationActive={viewPoints.length < 500}
                             />
                             {cellKeys.map((k, i) => (
                               <Line
@@ -571,7 +686,7 @@ export default function App() {
                                 stroke={CELL_LINE_COLORS[i % CELL_LINE_COLORS.length]}
                                 strokeWidth={1.75}
                                 dot={false}
-                                isAnimationActive={points.length < 500}
+                                isAnimationActive={viewPoints.length < 500}
                               />
                             ))}
                             <Brush dataKey="idx" height={28} stroke="#22d3ee" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
@@ -582,51 +697,87 @@ export default function App() {
                   </section>
 
                   <section className="section">
-                    <h2 className="section__title">Current &amp; state of charge</h2>
-                    <p className="section__sub">Amperes and SOC (%).</p>
+                    <h2 className="section__title">SOC</h2>
+                    <p className="section__sub">State of charge (%) over time.</p>
                     <div className="chart-wrap chart-wrap--tall">
-                      {points.length === 0 ? (
-                        <div className="chart-empty">
-                          No samples yet — current and SOC lines appear when your channel sends data.
-                        </div>
+                      {viewPoints.length === 0 ? (
+                        <div className="chart-empty">No samples yet — SOC line appears when your channel sends data.</div>
                       ) : (
-                        <ResponsiveContainer width="100%" height={360}>
+                        <ResponsiveContainer width="100%" height={320}>
                           <ComposedChart data={chartData} margin={{ top: 12, right: 16, left: 4, bottom: 4 }}>
                             <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
                             <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
-                            <YAxis
-                              yAxisId="a"
-                              tick={{ fill: "#8b9cb3", fontSize: 11 }}
-                              label={{ value: "A", angle: -90, position: "insideLeft", fill: "#8b9cb3" }}
-                            />
-                            <YAxis
-                              yAxisId="b"
-                              orientation="right"
-                              domain={[0, 100]}
-                              tick={{ fill: "#8b9cb3", fontSize: 11 }}
-                              label={{ value: "% SOC", angle: 90, position: "insideRight", fill: "#8b9cb3" }}
-                            />
+                            <YAxis domain={[0, 100]} tick={{ fill: "#8b9cb3", fontSize: 11 }} />
                             <Tooltip content={<ChartTooltip />} />
                             <Legend />
                             <Line
-                              yAxisId="a"
-                              type="monotone"
-                              dataKey="current_a"
-                              name="Current A"
-                              stroke="#fbbf24"
-                              strokeWidth={2}
-                              dot={false}
-                              isAnimationActive={points.length < 500}
-                            />
-                            <Line
-                              yAxisId="b"
                               type="monotone"
                               dataKey="soc_pct"
                               name="SOC %"
                               stroke="#34d399"
-                              strokeWidth={2}
+                              strokeWidth={2.5}
                               dot={false}
-                              isAnimationActive={points.length < 500}
+                              isAnimationActive={viewPoints.length < 500}
+                            />
+                            <Brush dataKey="idx" height={28} stroke="#34d399" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="section">
+                    <h2 className="section__title">Temperature</h2>
+                    <p className="section__sub">Battery temperature (°C) over time.</p>
+                    <div className="chart-wrap chart-wrap--tall">
+                      {viewPoints.length === 0 ? (
+                        <div className="chart-empty">No samples yet — temperature line appears when your channel sends data.</div>
+                      ) : (
+                        <ResponsiveContainer width="100%" height={320}>
+                          <ComposedChart data={chartData} margin={{ top: 12, right: 16, left: 4, bottom: 4 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
+                            <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
+                            <YAxis tick={{ fill: "#8b9cb3", fontSize: 11 }} />
+                            <Tooltip content={<ChartTooltip />} />
+                            <Legend />
+                            <Line
+                              type="monotone"
+                              dataKey="temperature_c"
+                              name="Temp °C"
+                              stroke="#22d3ee"
+                              strokeWidth={2.5}
+                              dot={false}
+                              isAnimationActive={viewPoints.length < 500}
+                            />
+                            <Brush dataKey="idx" height={28} stroke="#22d3ee" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
+                          </ComposedChart>
+                        </ResponsiveContainer>
+                      )}
+                    </div>
+                  </section>
+
+                  <section className="section">
+                    <h2 className="section__title">Current</h2>
+                    <p className="section__sub">Current (A) over time.</p>
+                    <div className="chart-wrap chart-wrap--tall">
+                      {viewPoints.length === 0 ? (
+                        <div className="chart-empty">No samples yet — current line appears when your channel sends data.</div>
+                      ) : (
+                        <ResponsiveContainer width="100%" height={320}>
+                          <ComposedChart data={chartData} margin={{ top: 12, right: 16, left: 4, bottom: 4 }}>
+                            <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
+                            <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
+                            <YAxis tick={{ fill: "#8b9cb3", fontSize: 11 }} />
+                            <Tooltip content={<ChartTooltip />} />
+                            <Legend />
+                            <Line
+                              type="monotone"
+                              dataKey="current_a"
+                              name="Current A"
+                              stroke="#fbbf24"
+                              strokeWidth={2.5}
+                              dot={false}
+                              isAnimationActive={viewPoints.length < 500}
                             />
                             <Brush dataKey="idx" height={28} stroke="#fbbf24" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
                           </ComposedChart>

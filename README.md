@@ -118,9 +118,9 @@ This repo supports **two formats**:
 | 2 | Cell 2 voltage (V2) |
 | 3 | Cell 3 voltage (V3) |
 | 4 | Cell 4 voltage (V4) |
-| 5 | Current (A) |
+| 5 | SOC (%) |
 | 6 | Temperature (°C) |
-| 7 | SOC (%) |
+| 7 | Current (A) |
 
 The backend computes **pack voltage** as \(V1+V2+V3+V4\) when cells are present.
 

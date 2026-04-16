@@ -64,7 +64,7 @@ def feed_to_metric(feed: dict, device_id: str) -> BatteryMetric:
 
     If any field contains BMS-style key=value telemetry (V1=…), parse it and fill battery metrics.
     Otherwise:
-      - Battery profile (channel 3337776): field1..4 → V1..V4, field5 → I(A), field6 → T(°C), field7 → SOC(%)
+      - Battery profile (channel 3337776): field1..4 → V1..V4, field5 → SOC(%), field6 → T(°C), field7 → I(A)
       - Default mapping: 1=temp, 2=humidity, 3=TDS, 4=pH, 5=water quality index.
     """
     eid = feed.get("entry_id")
@@ -111,18 +111,18 @@ def feed_to_metric(feed: dict, device_id: str) -> BatteryMetric:
             if v is not None:
                 cell_voltages[k] = v
         pack_v = sum(cell_voltages.values()) if cell_voltages else (_field_float(feed, "field1") or 0.0)
-        current_a = _field_float(feed, "field5") or 0.0
+        soc_pct = _field_float(feed, "field5")
         temperature_c = _field_float(feed, "field6") or 0.0
-        soc_pct = _field_float(feed, "field7")
+        current_a = _field_float(feed, "field7") or 0.0
         raw_line = ",".join(
             [
                 f"V1={v1}" if v1 is not None else "",
                 f"V2={v2}" if v2 is not None else "",
                 f"V3={v3}" if v3 is not None else "",
                 f"V4={v4}" if v4 is not None else "",
-                f"I={current_a}" if current_a else "",
                 f"T={temperature_c}" if temperature_c else "",
                 f"SOC={soc_pct}" if soc_pct is not None else "",
+                f"I={current_a}" if current_a else "",
             ]
         ).replace(",,", ",").strip(",")
         return BatteryMetric(
