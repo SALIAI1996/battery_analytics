@@ -2,10 +2,21 @@ from __future__ import annotations
 
 import threading
 from collections import deque
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Deque, Iterable, Optional
 
 from .models import BatteryMetric
+
+
+def _to_utc_aware(dt: datetime) -> datetime:
+    """
+    Normalize datetimes so comparisons never fail.
+    - If naive: assume UTC
+    - If aware: convert to UTC
+    """
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc)
 
 
 class MetricsRingBuffer:
@@ -36,7 +47,15 @@ class MetricsRingBuffer:
             snap = list(self._buf)
         if ts is None:
             return snap[-limit:]
-        out = [m for m in snap if m.ts > ts]
+        ts_n = _to_utc_aware(ts)
+        out: list[BatteryMetric] = []
+        for m in snap:
+            try:
+                if _to_utc_aware(m.ts) > ts_n:
+                    out.append(m)
+            except Exception:
+                # If a row has an invalid timestamp, skip it rather than breaking the whole endpoint.
+                continue
         if len(out) > limit:
             out = out[-limit:]
         return out

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
@@ -289,7 +289,9 @@ def _parse_ts(ts: Optional[str]) -> Optional[datetime]:
     if not ts:
         return None
     try:
-        return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        d = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        # Normalize: treat naive as UTC so comparisons work.
+        return d if d.tzinfo is not None else d.replace(tzinfo=timezone.utc)
     except Exception:
         return None
 
