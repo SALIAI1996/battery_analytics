@@ -1,4 +1,4 @@
-## Environmental analytics — React + FastAPI + ThingSpeak
+## Battery analytics — React + FastAPI + ThingSpeak
 
 **Stack:** **Vite + React** (`frontend-react/`) for the browser UI, **FastAPI** (`backend/`) for the API, **ThingSpeak** for cloud sensor feeds.  
 Optional: **USB serial** to a microcontroller for local battery telemetry (`POST /connect` with a COM/`/dev/tty.*` port).
@@ -11,7 +11,7 @@ Works on **macOS, Windows, and Linux**; production UI is typically **Vercel** + 
 |--------|--------|--------|
 | **Code** | GitHub | Source of truth; push here for history and collaboration. |
 | **Backend** | [Render](https://render.com) | Web service: `uvicorn backend.api:app --host 0.0.0.0 --port $PORT`. Use `render.yaml` (Blueprint) or create manually. Set `CORS_ORIGINS` to your Vercel URL(s), e.g. `https://your-app.vercel.app`. Optional: `THINGSPEAK_READ_API_KEY`. |
-| **Frontend** | [Vercel](https://vercel.com) | **Root directory:** `frontend-react` (or repo root + root `vercel.json`). Framework: Vite. Set **`VITE_API_URL`** to your Render API base (no trailing slash), e.g. `https://environmental-analytics-api.onrender.com`. |
+| **Frontend** | [Vercel](https://vercel.com) | **Root directory:** `frontend-react` (or repo root + root `vercel.json`). Framework: Vite. Set **`VITE_API_URL`** to your Render API base (no trailing slash), e.g. `https://your-api.onrender.com`. |
 
 **If Vercel is wired only via CLI / SDK (no GitHub integration):** pushes to GitHub **do not** update the live site. You must **deploy again** after pulling `main`—for example `cd frontend-react && npm run deploy:prod`, or your automation that calls the [Vercel API](https://vercel.com/docs/rest-api) / [`@vercel/sdk`](https://vercel.com/docs/sdk) (e.g. create a deployment for the linked project). To get automatic deploys from `main`, connect the GitHub repo under **Project → Settings → Git** in Vercel (optional).
 
@@ -97,7 +97,7 @@ Sensors / MCU ──▶ ThingSpeak ── HTTPS JSON API ──▶ FastAPI polle
                                                  React UI (Recharts)
 ```
 
-### ThingSpeak setup
+### ThingSpeak setup (battery)
 
 Default channel in the app is **3337776** (override with **Channel ID** in the UI or `THINGSPEAK_CHANNEL_ID` on the server).
 
@@ -105,7 +105,26 @@ Default channel in the app is **3337776** (override with **Channel ID** in the U
 2. In the React app, enter **Channel ID** (defaults to 3337776) and **Read API key** *or* rely on the server key only (leave key blank if the server has `THINGSPEAK_READ_API_KEY`).
 3. Click **Connect ThingSpeak**. The backend loads history and polls the [Channel Feed API](https://www.mathworks.com/help/thingspeak/readdata.html).
 
-**Default field mapping** (ThingSpeak fields 1–5):
+**Battery field mapping** (ThingSpeak fields):
+
+This repo supports **two formats**:
+
+1. **BMS text in a single field** (recommended): put a line like `V1=3.7,V2=3.6,V3=3.8,V4=3.5,I=1.2A,T=30C,SOC=75%` in any `field1..field8`.
+2. **Numeric fields** (channel `3337776` default): publish each metric as its own numeric field:
+
+| Field | Quantity |
+|------|----------|
+| 1 | Cell 1 voltage (V1) |
+| 2 | Cell 2 voltage (V2) |
+| 3 | Cell 3 voltage (V3) |
+| 4 | Cell 4 voltage (V4) |
+| 5 | Current (A) |
+| 6 | Temperature (°C) |
+| 7 | SOC (%) |
+
+The backend computes **pack voltage** as \(V1+V2+V3+V4\) when cells are present.
+
+**Legacy field mapping** (ThingSpeak fields 1–5):
 
 | Field | Quantity        |
 |------|-----------------|

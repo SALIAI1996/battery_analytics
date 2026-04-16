@@ -15,6 +15,7 @@ from .sc05_uart import parse_sc05_line
 log = logging.getLogger(__name__)
 
 THINGSPEAK_FEEDS_URL = "https://api.thingspeak.com/channels/{channel_id}/feeds.json"
+DEFAULT_BATTERY_CHANNEL_ID = 3337776
 
 
 def _parse_ts(created_at: str) -> datetime:
@@ -39,11 +40,32 @@ def _looks_like_bms_line(s: str) -> bool:
     return bool(re.search(r"\bV1\s*=", s, re.I) or re.search(r"\bV1\s*:", s, re.I))
 
 
+def _device_channel_id(device_id: str) -> Optional[int]:
+    """
+    device_id is usually "thingspeak:<channel_id>".
+    Returns channel_id int when parseable, else None.
+    """
+    if not device_id.startswith("thingspeak:"):
+        return None
+    raw = device_id.split(":", 1)[1].strip()
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _is_battery_profile(device_id: str) -> bool:
+    """Battery mapping default for channel 3337776 (can be extended later)."""
+    return _device_channel_id(device_id) == DEFAULT_BATTERY_CHANNEL_ID
+
+
 def feed_to_metric(feed: dict, device_id: str) -> BatteryMetric:
     """Map ThingSpeak fields to telemetry.
 
     If any field contains BMS-style key=value telemetry (V1=…), parse it and fill battery metrics.
-    Otherwise default mapping: 1=temp, 2=humidity, 3=TDS, 4=pH, 5=water quality index.
+    Otherwise:
+      - Battery profile (channel 3337776): field1..4 → V1..V4, field5 → I(A), field6 → T(°C), field7 → SOC(%)
+      - Default mapping: 1=temp, 2=humidity, 3=TDS, 4=pH, 5=water quality index.
     """
     eid = feed.get("entry_id")
     raw_default = f"ThingSpeak entry_id={eid}" if eid is not None else "ThingSpeak"
@@ -75,6 +97,47 @@ def feed_to_metric(feed: dict, device_id: str) -> BatteryMetric:
             ph=None,
             water_quality_index=None,
             raw_line=raw_line,
+            source="thingspeak",
+        )
+
+    # Battery numeric-field mapping (when the channel publishes each metric in its own field).
+    if _is_battery_profile(device_id):
+        v1 = _field_float(feed, "field1")
+        v2 = _field_float(feed, "field2")
+        v3 = _field_float(feed, "field3")
+        v4 = _field_float(feed, "field4")
+        cell_voltages: dict[str, float] = {}
+        for k, v in (("V1", v1), ("V2", v2), ("V3", v3), ("V4", v4)):
+            if v is not None:
+                cell_voltages[k] = v
+        pack_v = sum(cell_voltages.values()) if cell_voltages else (_field_float(feed, "field1") or 0.0)
+        current_a = _field_float(feed, "field5") or 0.0
+        temperature_c = _field_float(feed, "field6") or 0.0
+        soc_pct = _field_float(feed, "field7")
+        raw_line = ",".join(
+            [
+                f"V1={v1}" if v1 is not None else "",
+                f"V2={v2}" if v2 is not None else "",
+                f"V3={v3}" if v3 is not None else "",
+                f"V4={v4}" if v4 is not None else "",
+                f"I={current_a}" if current_a else "",
+                f"T={temperature_c}" if temperature_c else "",
+                f"SOC={soc_pct}" if soc_pct is not None else "",
+            ]
+        ).replace(",,", ",").strip(",")
+        return BatteryMetric(
+            ts=_parse_ts(feed["created_at"]),
+            device_id=device_id,
+            voltage_v=float(pack_v),
+            current_a=float(current_a),
+            temperature_c=float(temperature_c),
+            soc_pct=float(soc_pct) if soc_pct is not None else None,
+            cell_voltages=cell_voltages or None,
+            humidity_pct=None,
+            tds_ppm=None,
+            ph=None,
+            water_quality_index=None,
+            raw_line=raw_line or raw_default,
             source="thingspeak",
         )
 
