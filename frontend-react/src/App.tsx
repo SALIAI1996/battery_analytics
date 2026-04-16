@@ -1,30 +1,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
-  Brush,
-  CartesianGrid,
-  ComposedChart,
-  Legend,
-  Line,
   Pie,
   PieChart,
   ResponsiveContainer,
   Tooltip,
-  XAxis,
-  YAxis,
   Cell,
 } from "recharts";
-import { ChartTooltip } from "./components/ChartTooltip";
-import { KpiCard } from "./components/KpiCard";
 import { apiBase, apiGet, apiPost } from "./api";
-import { formatDelta, numericSeries, seriesStats } from "./metrics";
 import type { BatteryMetric, LatestResponse, StatusResponse } from "./types";
 import "./App.css";
 
 const MAX_POINTS = 4000;
-const SPARK_POINTS = 80;
 
-/** Distinct stroke colors for per-cell voltage lines (cycles if more cells). */
-const CELL_LINE_COLORS = ["#22d3ee", "#a78bfa", "#fbbf24", "#fb7185", "#4ade80", "#f472b6"];
 const PIE_COLORS = ["#22d3ee", "#a78bfa", "#fbbf24", "#fb7185", "#4ade80", "#f472b6"];
 
 function fmt(v: number | null | undefined, nd = 2): string {
@@ -33,16 +20,33 @@ function fmt(v: number | null | undefined, nd = 2): string {
   return v.toFixed(nd);
 }
 
-function spark(values: number[], max = SPARK_POINTS) {
-  const slice = values.length > max ? values.slice(-max) : values;
-  return slice.map((v) => ({ v }));
-}
-
 function pct(v: number | null | undefined, nd = 0): string {
   if (v === null || v === undefined) return "—";
   if (Number.isNaN(v)) return "—";
   return `${v.toFixed(nd)}%`;
 }
+
+function clamp01(x: number) {
+  if (Number.isNaN(x)) return 0;
+  if (x < 0) return 0;
+  if (x > 1) return 1;
+  return x;
+}
+
+function clamp(x: number, lo: number, hi: number) {
+  if (Number.isNaN(x)) return lo;
+  if (x < lo) return lo;
+  if (x > hi) return hi;
+  return x;
+}
+
+type PieSpec = {
+  key: string;
+  value: number | null;
+  unit: string;
+  fraction01: number; // 0..1 for the donut fill
+  color: string;
+};
 
 export default function App() {
   const [status, setStatus] = useState<StatusResponse | null>(null);
@@ -183,11 +187,6 @@ export default function App() {
   /** Show main dashboard whenever ThingSpeak is streaming — do not require `last` (fixes empty UI before first sample). */
   const showThingSpeakDashboard = Boolean(status?.mode === "thingspeak" && status?.streaming);
 
-  const hasBatteryPack = useMemo(
-    () => viewPoints.some((p) => p.cell_voltages && Object.keys(p.cell_voltages).length > 0),
-    [viewPoints]
-  );
-
   const cellKeys = useMemo(() => {
     const s = new Set<string>();
     for (const p of viewPoints) {
@@ -196,72 +195,59 @@ export default function App() {
     return Array.from(s).sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
   }, [viewPoints]);
 
-  const chartData = useMemo(() => {
-    return viewPoints.map((p, idx) => {
-      const d = new Date(p.ts);
-      const row: Record<string, string | number | undefined> = {
-        idx,
-        t: p.ts,
-        timeShort: d.toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-        timeFull: d.toLocaleString(),
-        temperature_c: p.temperature_c,
-        humidity_pct: p.humidity_pct ?? undefined,
-        tds_ppm: p.tds_ppm ?? undefined,
-        ph: p.ph ?? undefined,
-        water_quality_index: p.water_quality_index ?? undefined,
-        voltage_v: p.voltage_v,
-        current_a: p.current_a,
-        soc_pct: p.soc_pct ?? undefined,
-      };
-      for (const k of cellKeys) {
-        row[`cell_${k}`] = p.cell_voltages?.[k] ?? undefined;
-      }
-      return row;
+  const pies = useMemo((): PieSpec[] => {
+    // Defaults for scaling. You can tune these if your hardware differs.
+    const maxCellV = 4.2;
+    const maxTempC = 80;
+    const maxCurrentA = 100;
+    const v = (x: number | null | undefined) => (x == null || Number.isNaN(x) ? null : x);
+
+    const soc = v(last?.soc_pct);
+    const temp = v(last?.temperature_c);
+    const cur = v(last?.current_a);
+
+    const base: PieSpec[] = [
+      {
+        key: "soc",
+        value: soc,
+        unit: "%",
+        fraction01: clamp01(((soc ?? 0) / 100) || 0),
+        color: "#34d399",
+      },
+    ];
+
+    const cells = last?.cell_voltages ?? {};
+    const cellOrder = (cellKeys.length ? cellKeys : ["V1", "V2", "V3", "V4"]).slice(0, 4);
+    cellOrder.forEach((k, i) => {
+      const cv = v(cells[k]);
+      base.push({
+        key: k,
+        value: cv,
+        unit: "V",
+        fraction01: clamp01(((cv ?? 0) / maxCellV) || 0),
+        color: PIE_COLORS[i % PIE_COLORS.length]!,
+      });
     });
-  }, [viewPoints, cellKeys]);
 
-  const tempSt = useMemo(() => seriesStats(numericSeries(viewPoints, (p) => p.temperature_c)), [viewPoints]);
-  const packVSt = useMemo(() => seriesStats(numericSeries(viewPoints, (p) => p.voltage_v)), [viewPoints]);
-  const currSt = useMemo(() => seriesStats(numericSeries(viewPoints, (p) => p.current_a)), [viewPoints]);
-  const socSt = useMemo(() => seriesStats(numericSeries(viewPoints, (p) => p.soc_pct)), [viewPoints]);
-
-  const insights = useMemo(() => {
-    if (!showThingSpeakDashboard || !viewPoints.length) return null;
-    const lines: string[] = [];
-    const volts = numericSeries(viewPoints, (p) => p.voltage_v);
-    if (volts.length && volts.some((v) => v > 0.001)) {
-      lines.push(
-        `Pack voltage range in view: ${Math.min(...volts).toFixed(2)} – ${Math.max(...volts).toFixed(2)} V`
-      );
-    }
-    const lastPt = viewPoints[viewPoints.length - 1]!;
-    if (lastPt.cell_voltages) {
-      const xs = Object.values(lastPt.cell_voltages);
-      if (xs.length > 1) {
-        const spread = Math.max(...xs) - Math.min(...xs);
-        lines.push(`Latest cell spread: ${spread.toFixed(3)} V`);
+    base.push(
+      {
+        key: "temp",
+        value: temp,
+        unit: "°C",
+        fraction01: clamp01(((clamp(temp ?? 0, 0, maxTempC)) / maxTempC) || 0),
+        color: "#22d3ee",
+      },
+      {
+        key: "current",
+        value: cur,
+        unit: "A",
+        fraction01: clamp01(((clamp(Math.abs(cur ?? 0), 0, maxCurrentA)) / maxCurrentA) || 0),
+        color: "#fbbf24",
       }
-    }
-    const temps = numericSeries(viewPoints, (p) => p.temperature_c);
-    if (temps.length) {
-      lines.push(
-        `BMS temperature range in view: ${Math.min(...temps).toFixed(2)} – ${Math.max(...temps).toFixed(2)} °C`
-      );
-    }
-    return lines.length ? lines : null;
-  }, [showThingSpeakDashboard, viewPoints]);
+    );
 
-  const timeSpanLabel = useMemo(() => {
-    if (viewPoints.length < 2) return null;
-    const a = new Date(viewPoints[0]!.ts);
-    const b = new Date(viewPoints[viewPoints.length - 1]!.ts);
-    const mins = (b.getTime() - a.getTime()) / 60000;
-    if (mins < 120) return `${Math.round(mins)} min window`;
-    if (mins < 2880) return `${(mins / 60).toFixed(1)} h window`;
-    return `${(mins / 1440).toFixed(1)} d window`;
-  }, [viewPoints]);
-
-  const lastSampleLabel = last ? new Date(last.ts).toLocaleString() : null;
+    return base;
+  }, [last, cellKeys]);
 
   return (
     <div className="app">
@@ -269,10 +255,6 @@ export default function App() {
         <div className="header__row">
           <div>
             <h1>Battery Analytics</h1>
-            <p className="header__lede">
-              Pack and per-cell voltages, current, temperature, and SOC from ThingSpeak (BMS text such as{" "}
-              <code className="mono">V1=3.7,…,I=1.2A,T=30C,SOC=75%</code> in any field).
-            </p>
           </div>
           <div className="header__links">
             {apiBase() ? (
@@ -293,10 +275,6 @@ export default function App() {
           Use <code className="mono">VITE_API_URL</code> = API origin only (e.g.{" "}
           <code className="mono">https://battery-analytics.onrender.com</code>), no <code className="mono">/api</code>{" "}
           suffix.
-        </p>
-        <p className="header__hint header__hint--meta">
-          UI bundle: <span className="mono">{__BUILD_TIME__}</span> — if this does not change after a deploy, hard-refresh
-          (Shift+Reload) or clear site data; API calls use no-cache fetch.
         </p>
       </header>
 
@@ -377,22 +355,11 @@ export default function App() {
           {err && <p className="error">{err}</p>}
 
           <div className="panel__help">
-            <strong>ThingSpeak read key</strong>
+            <strong>Tip</strong>
             <p className="panel__help-p">
-              The <strong>Read API key must belong to the channel ID</strong> you enter above. If the key is for a
-              different channel, the API cannot load feeds and charts stay empty. Set the same key on the server as{" "}
-              <span className="mono">THINGSPEAK_READ_API_KEY</span> (e.g. Render) or paste it here when connecting so{" "}
-              <span className="mono">/thingspeak/channel-status</span> and polling work.
+              Keep your ThingSpeak read key on the server as <span className="mono">THINGSPEAK_READ_API_KEY</span> to
+              avoid exposing it in the browser.
             </p>
-            <strong>Reading the dashboard</strong>
-            <ul>
-              <li>
-                <strong>KPI cards</strong> show the latest pack and BMS values; sparklines update as samples arrive.
-              </li>
-              <li>
-                <strong>Brush</strong> (grey bar under a chart) zooms and pans the time range.
-              </li>
-            </ul>
           </div>
         </aside>
 
@@ -427,18 +394,6 @@ export default function App() {
                     <span className="status-pill__hint"> (API buffer {status.metrics_buffer_len})</span>
                   )}
                 </span>
-              </div>
-            )}
-            {timeSpanLabel && (
-              <div className="status-pill">
-                <span className="status-pill__k">Window</span>
-                <span className="status-pill__v">{timeSpanLabel}</span>
-              </div>
-            )}
-            {lastSampleLabel && (
-              <div className="status-pill status-pill--grow">
-                <span className="status-pill__k">Last sample</span>
-                <span className="status-pill__v">{lastSampleLabel}</span>
               </div>
             )}
           </div>
@@ -488,314 +443,44 @@ export default function App() {
 
           {showThingSpeakDashboard && (
             <>
-                  <section className="section">
-                    <h2 className="section__title">Battery pack</h2>
-                    <p className="section__sub">
-                      Parsed from ThingSpeak fields containing BMS text (e.g.{" "}
-                      <code className="mono">V1=3.7,…,I=1.2A,T=30C,SOC=75%</code>). Use the brush on charts to narrow
-                      time.
-                    </p>
-                    <div className="kpi-grid">
-                      <KpiCard
-                        title="Pack voltage"
-                        unit="V"
-                        value={last ? fmt(last.voltage_v) : "—"}
-                        sparkline={spark(numericSeries(viewPoints, (p) => p.voltage_v))}
-                        min={packVSt?.min}
-                        max={packVSt?.max}
-                        deltaLabel={
-                          packVSt && packVSt.delta !== 0
-                            ? formatDelta(packVSt.delta, "V") + " window"
-                            : undefined
-                        }
-                        footnote="Sum of cell voltages when cells are present"
-                      />
-                      <KpiCard
-                        title="Current"
-                        unit="A"
-                        value={last ? fmt(last.current_a) : "—"}
-                        sparkline={spark(numericSeries(viewPoints, (p) => p.current_a))}
-                        min={currSt?.min}
-                        max={currSt?.max}
-                        deltaLabel={
-                          currSt && currSt.delta !== 0
-                            ? formatDelta(currSt.delta, "A") + " window"
-                            : undefined
-                        }
-                      />
-                      <KpiCard
-                        title="BMS temperature"
-                        unit="°C"
-                        value={last ? fmt(last.temperature_c) : "—"}
-                        sparkline={spark(numericSeries(viewPoints, (p) => p.temperature_c))}
-                        min={tempSt?.min}
-                        max={tempSt?.max}
-                        deltaLabel={
-                          tempSt && tempSt.delta !== 0
-                            ? formatDelta(tempSt.delta, "°C") + " window"
-                            : undefined
-                        }
-                      />
-                      <KpiCard
-                        title="State of charge"
-                        unit="%"
-                        value={last != null && last.soc_pct != null ? fmt(last.soc_pct, 0) : "—"}
-                        sparkline={spark(numericSeries(viewPoints, (p) => p.soc_pct))}
-                        min={socSt?.min}
-                        max={socSt?.max}
-                        deltaLabel={
-                          socSt && socSt.delta !== 0 ? formatDelta(socSt.delta, "%", 0) + " window" : undefined
-                        }
-                      />
-                    </div>
-                    {viewPoints.length > 0 && !hasBatteryPack && (
-                      <div className="banner warn" style={{ marginTop: "1rem" }}>
-                        <strong>No per-cell voltages detected yet.</strong> Your channel can publish either:
-                        <ul className="thingspeak-wait__list">
-                          <li>
-                            <strong>BMS text</strong> in any field:{" "}
-                            <code className="mono">V1=3.7,V2=…,I=1.2A,T=30C,SOC=75%</code>
-                          </li>
-                          <li>
-                            <strong>Numeric fields</strong>: field1..4 = Cell 1..4, field5 = SOC (%), field6 = Temp (°C),
-                            field7 = Current (A)
-                          </li>
-                        </ul>
-                      </div>
-                    )}
-                    {cellKeys.length > 0 && last && (
-                      <div className="battery-cells" aria-label="Latest cell voltages">
-                        {cellKeys.map((k) => (
-                          <div key={k} className="battery-cell-pill">
-                            <span className="battery-cell-pill__k">{k}</span>
-                            <span className="battery-cell-pill__v">
-                              {fmt(last.cell_voltages?.[k], 2)} V
-                            </span>
+              <section className="section section--minimal">
+                <div className="pie-min-grid" aria-label="Battery pie charts">
+                  {pies.map((p) => (
+                    <div key={p.key} className="pie-tile">
+                      <div className="pie-tile__chart">
+                        <ResponsiveContainer width="100%" height={240}>
+                          <PieChart>
+                            <Pie
+                              data={[
+                                { name: p.key, value: p.fraction01 * 100 },
+                                { name: "rest", value: 100 - p.fraction01 * 100 },
+                              ]}
+                              dataKey="value"
+                              innerRadius={78}
+                              outerRadius={102}
+                              paddingAngle={2}
+                              startAngle={90}
+                              endAngle={-270}
+                              stroke="rgba(15,22,32,0.0)"
+                              isAnimationActive={true}
+                            >
+                              <Cell fill={p.color} />
+                              <Cell fill="rgba(148, 163, 184, 0.18)" />
+                            </Pie>
+                            <Tooltip />
+                          </PieChart>
+                        </ResponsiveContainer>
+                        <div className="pie-tile__center">
+                          <div className="pie-tile__value">
+                            {p.unit === "%" ? (p.value != null ? pct(p.value, 0) : "—") : fmt(p.value, p.unit === "V" ? 2 : 1)}
                           </div>
-                        ))}
-                      </div>
-                    )}
-                  </section>
-
-                  <section className="section">
-                    <h2 className="section__title">Battery distribution</h2>
-                    <p className="section__sub">SOC donut and cell voltage share (percent of pack).</p>
-                    <div className="chart-wrap chart-wrap--tall">
-                      {last == null ? (
-                        <div className="chart-empty">No samples yet — pie charts will appear after the first ThingSpeak row.</div>
-                      ) : (
-                        <div className="pie-grid">
-                          <div className="pie-card">
-                            <div className="pie-card__title">State of charge</div>
-                            <ResponsiveContainer width="100%" height={260}>
-                              <PieChart>
-                                <Tooltip />
-                                <Pie
-                                  data={[
-                                    { name: "SOC", value: Math.max(0, Math.min(100, last.soc_pct ?? 0)) },
-                                    { name: "Remaining", value: Math.max(0, 100 - Math.max(0, Math.min(100, last.soc_pct ?? 0))) },
-                                  ]}
-                                  dataKey="value"
-                                  nameKey="name"
-                                  innerRadius={70}
-                                  outerRadius={95}
-                                  paddingAngle={2}
-                                  startAngle={90}
-                                  endAngle={-270}
-                                >
-                                  <Cell fill="#34d399" />
-                                  <Cell fill="rgba(148, 163, 184, 0.25)" />
-                                </Pie>
-                              </PieChart>
-                            </ResponsiveContainer>
-                            <div className="pie-card__kpi">
-                              <span className="pie-card__kpi-k">SOC</span>
-                              <span className="pie-card__kpi-v">{pct(last.soc_pct, 0)}</span>
-                            </div>
-                          </div>
-
-                          <div className="pie-card">
-                            <div className="pie-card__title">Cell voltages</div>
-                            <ResponsiveContainer width="100%" height={260}>
-                              <PieChart>
-                                <Tooltip />
-                                <Pie
-                                  data={(() => {
-                                    const cells = last.cell_voltages ?? {};
-                                    const entries = Object.entries(cells).filter(([, v]) => typeof v === "number" && !Number.isNaN(v));
-                                    const sum = entries.reduce((a, [, v]) => a + v, 0);
-                                    if (!entries.length || sum <= 0) return [{ name: "No cell data", value: 1 }];
-                                    return entries.map(([k, v]) => ({ name: k, value: (v / sum) * 100 }));
-                                  })()}
-                                  dataKey="value"
-                                  nameKey="name"
-                                  innerRadius={60}
-                                  outerRadius={95}
-                                  paddingAngle={2}
-                                >
-                                  {(cellKeys.length ? cellKeys : ["V1", "V2", "V3", "V4"]).map((k, i) => (
-                                    <Cell key={k} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                                  ))}
-                                </Pie>
-                              </PieChart>
-                            </ResponsiveContainer>
-                            <div className="pie-card__hint">
-                              {last.cell_voltages ? "Slice = % of total pack voltage" : "No per-cell fields found in the latest sample"}
-                            </div>
-                          </div>
+                          <div className="pie-tile__unit">{p.unit === "%" ? "" : p.unit}</div>
                         </div>
-                      )}
+                      </div>
                     </div>
-                  </section>
-
-                  <section className="section">
-                    <h2 className="section__title">Pack &amp; cell voltages</h2>
-                    <p className="section__sub">Pack total and per-cell traces (volts).</p>
-                    <div className="chart-wrap chart-wrap--tall">
-                      {viewPoints.length === 0 ? (
-                        <div className="chart-empty">
-                          No time-series samples yet. After ThingSpeak returns rows, voltage traces appear here.
-                        </div>
-                      ) : (
-                        <ResponsiveContainer width="100%" height={420}>
-                          <ComposedChart data={chartData} margin={{ top: 12, right: 12, left: 4, bottom: 4 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
-                            <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
-                            <YAxis
-                              tick={{ fill: "#8b9cb3", fontSize: 11 }}
-                              domain={["auto", "auto"]}
-                              label={{ value: "V", angle: -90, position: "insideLeft", fill: "#8b9cb3" }}
-                            />
-                            <Tooltip content={<ChartTooltip />} />
-                            <Legend />
-                            <Line
-                              type="monotone"
-                              dataKey="voltage_v"
-                              name="Pack V"
-                              stroke="#e8edf5"
-                              strokeWidth={2.5}
-                              dot={false}
-                              isAnimationActive={viewPoints.length < 500}
-                            />
-                            {cellKeys.map((k, i) => (
-                              <Line
-                                key={k}
-                                type="monotone"
-                                dataKey={`cell_${k}`}
-                                name={`${k}`}
-                                stroke={CELL_LINE_COLORS[i % CELL_LINE_COLORS.length]}
-                                strokeWidth={1.75}
-                                dot={false}
-                                isAnimationActive={viewPoints.length < 500}
-                              />
-                            ))}
-                            <Brush dataKey="idx" height={28} stroke="#22d3ee" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
-                          </ComposedChart>
-                        </ResponsiveContainer>
-                      )}
-                    </div>
-                  </section>
-
-                  <section className="section">
-                    <h2 className="section__title">SOC</h2>
-                    <p className="section__sub">State of charge (%) over time.</p>
-                    <div className="chart-wrap chart-wrap--tall">
-                      {viewPoints.length === 0 ? (
-                        <div className="chart-empty">No samples yet — SOC line appears when your channel sends data.</div>
-                      ) : (
-                        <ResponsiveContainer width="100%" height={320}>
-                          <ComposedChart data={chartData} margin={{ top: 12, right: 16, left: 4, bottom: 4 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
-                            <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
-                            <YAxis domain={[0, 100]} tick={{ fill: "#8b9cb3", fontSize: 11 }} />
-                            <Tooltip content={<ChartTooltip />} />
-                            <Legend />
-                            <Line
-                              type="monotone"
-                              dataKey="soc_pct"
-                              name="SOC %"
-                              stroke="#34d399"
-                              strokeWidth={2.5}
-                              dot={false}
-                              isAnimationActive={viewPoints.length < 500}
-                            />
-                            <Brush dataKey="idx" height={28} stroke="#34d399" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
-                          </ComposedChart>
-                        </ResponsiveContainer>
-                      )}
-                    </div>
-                  </section>
-
-                  <section className="section">
-                    <h2 className="section__title">Temperature</h2>
-                    <p className="section__sub">Battery temperature (°C) over time.</p>
-                    <div className="chart-wrap chart-wrap--tall">
-                      {viewPoints.length === 0 ? (
-                        <div className="chart-empty">No samples yet — temperature line appears when your channel sends data.</div>
-                      ) : (
-                        <ResponsiveContainer width="100%" height={320}>
-                          <ComposedChart data={chartData} margin={{ top: 12, right: 16, left: 4, bottom: 4 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
-                            <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
-                            <YAxis tick={{ fill: "#8b9cb3", fontSize: 11 }} />
-                            <Tooltip content={<ChartTooltip />} />
-                            <Legend />
-                            <Line
-                              type="monotone"
-                              dataKey="temperature_c"
-                              name="Temp °C"
-                              stroke="#22d3ee"
-                              strokeWidth={2.5}
-                              dot={false}
-                              isAnimationActive={viewPoints.length < 500}
-                            />
-                            <Brush dataKey="idx" height={28} stroke="#22d3ee" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
-                          </ComposedChart>
-                        </ResponsiveContainer>
-                      )}
-                    </div>
-                  </section>
-
-                  <section className="section">
-                    <h2 className="section__title">Current</h2>
-                    <p className="section__sub">Current (A) over time.</p>
-                    <div className="chart-wrap chart-wrap--tall">
-                      {viewPoints.length === 0 ? (
-                        <div className="chart-empty">No samples yet — current line appears when your channel sends data.</div>
-                      ) : (
-                        <ResponsiveContainer width="100%" height={320}>
-                          <ComposedChart data={chartData} margin={{ top: 12, right: 16, left: 4, bottom: 4 }}>
-                            <CartesianGrid strokeDasharray="3 3" stroke="#243044" vertical={false} />
-                            <XAxis dataKey="timeShort" tick={{ fill: "#8b9cb3", fontSize: 11 }} minTickGap={24} />
-                            <YAxis tick={{ fill: "#8b9cb3", fontSize: 11 }} />
-                            <Tooltip content={<ChartTooltip />} />
-                            <Legend />
-                            <Line
-                              type="monotone"
-                              dataKey="current_a"
-                              name="Current A"
-                              stroke="#fbbf24"
-                              strokeWidth={2.5}
-                              dot={false}
-                              isAnimationActive={viewPoints.length < 500}
-                            />
-                            <Brush dataKey="idx" height={28} stroke="#fbbf24" fill="rgba(36,48,68,0.5)" travellerWidth={8} />
-                          </ComposedChart>
-                        </ResponsiveContainer>
-                      )}
-                    </div>
-                  </section>
-
-              {insights && (
-                <section className="section">
-                  <h2 className="section__title">Summary for visible window</h2>
-                  <ul className="insight-list">
-                    {insights.map((line) => (
-                      <li key={line}>{line}</li>
-                    ))}
-                  </ul>
-                </section>
-              )}
+                  ))}
+                </div>
+              </section>
             </>
           )}
 
